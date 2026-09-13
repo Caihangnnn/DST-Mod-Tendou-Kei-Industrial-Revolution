@@ -1,6 +1,7 @@
 -- 天体宝珠协议：环绕宝珠 AOE 伤害。
 
 local BeastCommon = require("kei/protocols/combat/effects/beast/_beast_common")
+local KeiEffectManager = require("kei/effect_manager")
 local CELESTIAL_ORB_FOLLOW_PERIOD = FRAMES
 local CELESTIAL_ORB_TARGET_MUST_TAGS = { "_combat", "_health" }
 local CELESTIAL_ORB_TARGET_EXCLUDE_TAGS = { "INLIMBO", "FX", "NOCLICK", "DECOR", "player", "playerghost", "companion" }
@@ -32,6 +33,11 @@ local function SpawnOrb(slots, index)
     end
     orb.persists = false
     slots._kei_celestial_orbs[index] = orb
+    KeiEffectManager.Register(slots.inst, orb, "celestial_orb_" .. tostring(index), function()
+        if slots._kei_celestial_orbs ~= nil then
+            slots._kei_celestial_orbs[index] = nil
+        end
+    end)
     return orb
 end
 
@@ -55,6 +61,7 @@ local function EnsureOrbs(slots, inst)
         if orb ~= nil and orb:IsValid() then
             orb:Remove()
         end
+        KeiEffectManager.Remove(slots.inst, "celestial_orb_" .. tostring(index), "orb_count_changed")
         slots._kei_celestial_orbs[index] = nil
         slots._kei_celestial_orb_angles[index] = nil
     end
@@ -135,6 +142,9 @@ function CelestialOrbEffect.Enable(slots, inst)
         slots._kei_celestial_orb_task = inst:DoPeriodicTask(CELESTIAL_ORB_FOLLOW_PERIOD, function()
             UpdateOrbs(slots, inst)
         end)
+        KeiEffectManager.RegisterTask(inst, slots._kei_celestial_orb_task, "celestial_orb_follow", function()
+            slots._kei_celestial_orb_task = nil
+        end)
     end
 end
 
@@ -149,6 +159,7 @@ function CelestialOrbEffect.Disable(slots, inst)
         if orb ~= nil and orb:IsValid() then
             orb:Remove()
         end
+        KeiEffectManager.Remove(slots.inst, "celestial_orb_" .. tostring(index), "protocol_disable")
         slots._kei_celestial_orbs[index] = nil
     end
 

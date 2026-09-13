@@ -1,6 +1,7 @@
 -- 战争瓦器人协议：轨道打击光束 + 目标标记 FX。
 
 local BeastCommon = require("kei/protocols/combat/effects/beast/_beast_common")
+local KeiEffectManager = require("kei/effect_manager")
 local WAGBOSS_TARGET_FOLLOW_PERIOD = FRAMES
 
 local function IsValidBeamTarget(owner, target)
@@ -38,10 +39,15 @@ local function EnableTargetFx(slots, inst)
     local fx = SpawnPrefab("kei_wagboss_target_fx")
     if fx ~= nil then
         slots._kei_wagboss_target_fx = fx
+        KeiEffectManager.Register(inst, fx, "wagboss_target", function()
+            slots._kei_wagboss_target_fx = nil
+            slots._kei_wagboss_target_follow_task = nil
+        end)
         PositionTargetFx(slots)
         slots._kei_wagboss_target_follow_task = inst:DoPeriodicTask(WAGBOSS_TARGET_FOLLOW_PERIOD, function()
             PositionTargetFx(slots)
         end)
+        KeiEffectManager.SetTask(inst, "wagboss_target", slots._kei_wagboss_target_follow_task)
     end
 end
 
@@ -50,6 +56,7 @@ local function DisableTargetFx(slots)
         slots._kei_wagboss_target_ready_task:Cancel()
         slots._kei_wagboss_target_ready_task = nil
     end
+    KeiEffectManager.Release(slots.inst, "wagboss_target_ready", "target_disable")
     if slots._kei_wagboss_target_follow_task ~= nil then
         slots._kei_wagboss_target_follow_task:Cancel()
         slots._kei_wagboss_target_follow_task = nil
@@ -74,7 +81,11 @@ local function RefreshTargetFx(slots, inst)
         DisableTargetFx(slots)
         slots._kei_wagboss_target_ready_task = inst:DoTaskInTime(ready_time - now, function()
             slots._kei_wagboss_target_ready_task = nil
+            KeiEffectManager.Release(inst, "wagboss_target_ready", "task_complete")
             RefreshTargetFx(slots, inst)
+        end)
+        KeiEffectManager.RegisterTask(inst, slots._kei_wagboss_target_ready_task, "wagboss_target_ready", function()
+            slots._kei_wagboss_target_ready_task = nil
         end)
         return
     end
@@ -123,6 +134,9 @@ function WagbossEffect.OnHitOther(slots, inst, data)
             RefreshTargetFx(slots, inst)
         end
     )
+    KeiEffectManager.RegisterTask(inst, slots._kei_wagboss_target_ready_task, "wagboss_target_ready", function()
+        slots._kei_wagboss_target_ready_task = nil
+    end)
 end
 
 return WagbossEffect

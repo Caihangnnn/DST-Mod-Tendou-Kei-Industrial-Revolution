@@ -5,6 +5,7 @@ local SPIDER_QUEEN_MUST_TAGS = { "_combat", "_health" }
 local SPIDER_QUEEN_EXCLUDE_TAGS = { "INLIMBO", "FX", "NOCLICK", "DECOR", "player", "playerghost", "flying", "companion" }
 
 local SlowSources = require("kei/slow_sources")
+local KeiEffectManager = require("kei/effect_manager")
 
 local SpiderQueenEffect = {}
 
@@ -76,6 +77,10 @@ local function SpawnWebFx(slots, inst)
     end
 
     slots._kei_spider_queen_web_fx = fx
+    KeiEffectManager.Register(inst, fx, "spiderqueen_web", function()
+        slots._kei_spider_queen_web_fx = nil
+        slots._kei_spider_queen_follow_task = nil
+    end)
 
     if slots._kei_spider_queen_follow_task == nil then
         slots._kei_spider_queen_follow_task = inst:DoPeriodicTask(FRAMES, function()
@@ -84,6 +89,7 @@ local function SpawnWebFx(slots, inst)
                 web_fx.Transform:SetPosition(inst.Transform:GetWorldPosition())
             end
         end)
+        KeiEffectManager.SetTask(inst, "spiderqueen_web", slots._kei_spider_queen_follow_task)
     end
 end
 
@@ -194,6 +200,9 @@ function SpiderQueenEffect.Disable(slots, inst)
         slots._kei_spider_queen_follow_task = nil
     end
     RemoveWebFx(slots)
+    if not KeiEffectManager.Remove(inst, "spiderqueen_web", "protocol_disable") then
+        slots._kei_spider_queen_web_fx = nil
+    end
     ClearAllSlows(slots, inst)
     DisableSpiderDisguise(slots, inst)
 end

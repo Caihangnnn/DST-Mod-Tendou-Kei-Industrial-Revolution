@@ -1,6 +1,7 @@
 -- 拾荒疯猪协议公共实现：控制免疫、盾牌特效、伤害吸收。
 
 local BeastCommon = require("kei/protocols/combat/effects/beast/_beast_common")
+local KeiEffectManager = require("kei/effect_manager")
 local DAYWALKER2_SHIELD_FOLLOW_PERIOD = FRAMES
 
 local Daywalker2Common = {}
@@ -26,10 +27,15 @@ local function EnableShieldFx(slots, inst)
     local fx = SpawnPrefab("kei_daywalker2_shield_fx")
     if fx ~= nil then
         slots._kei_daywalker2_shield_fx = fx
+        KeiEffectManager.Register(inst, fx, "daywalker2_shield", function()
+            slots._kei_daywalker2_shield_fx = nil
+            slots._kei_daywalker2_shield_follow_task = nil
+        end)
         PositionShieldFx(slots)
         slots._kei_daywalker2_shield_follow_task = inst:DoPeriodicTask(DAYWALKER2_SHIELD_FOLLOW_PERIOD, function()
             PositionShieldFx(slots)
         end)
+        KeiEffectManager.SetTask(inst, "daywalker2_shield", slots._kei_daywalker2_shield_follow_task)
     end
 end
 
@@ -38,12 +44,12 @@ local function DisableShieldFx(slots)
         slots._kei_daywalker2_shield_follow_task:Cancel()
         slots._kei_daywalker2_shield_follow_task = nil
     end
-    if slots._kei_daywalker2_shield_fx ~= nil then
-        if slots._kei_daywalker2_shield_fx:IsValid() then
+    if not KeiEffectManager.Remove(slots.inst, "daywalker2_shield", "protocol_disable") then
+        if slots._kei_daywalker2_shield_fx ~= nil and slots._kei_daywalker2_shield_fx:IsValid() then
             slots._kei_daywalker2_shield_fx:Remove()
         end
-        slots._kei_daywalker2_shield_fx = nil
     end
+    slots._kei_daywalker2_shield_fx = nil
 end
 
 -- 判断高级协议是否激活，用于压制初级协议的同类能力。

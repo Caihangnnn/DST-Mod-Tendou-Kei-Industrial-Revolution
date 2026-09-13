@@ -1,5 +1,6 @@
 local KEI_RPC_NAMESPACE = "TendouKei"
 local ClientSettings = require("kei/client_settings")
+local KeiEffectManager = require("kei/effect_manager")
 
 -- The engine can dispatch the disconnect callback after the world entity has
 -- already been removed during shard migration. The vanilla handler assumes
@@ -67,6 +68,7 @@ local function SpawnMutatedWargFlameReadyFx(player)
     local fx = SpawnPrefab(ismount and "fx_book_moon_mount" or "fx_book_moon")
     if fx ~= nil then
         fx.persists = false
+        KeiEffectManager.Register(player, fx)
 
         if ismount then
             fx.Transform:SetSixFaced()
@@ -144,6 +146,12 @@ AddModRPCHandler(KEI_RPC_NAMESPACE, "MutatedWargFlame", function(player, x, z)
 
     fx.Transform:SetPosition(px, py, pz)
     fx:SetCaster(player, Vector3(x, py, z))
+    KeiEffectManager.Register(player, fx, "mutatedwarg_flamethrower", function()
+        if player.kei_mutatedwarg_flamethrower_fx == fx then
+            player.kei_mutatedwarg_flamethrower_fx = nil
+        end
+        player.kei_mutatedwarg_channelcasting = nil
+    end)
     player.kei_mutatedwarg_flamethrower_fx = fx
     player.kei_mutatedwarg_channelcasting = true
     fx:ListenForEvent("onremove", function()

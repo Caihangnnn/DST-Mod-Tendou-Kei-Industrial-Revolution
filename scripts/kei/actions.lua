@@ -7,6 +7,7 @@ local IntegrityStat = require("kei/stats/integrity")
 local SpDamageUtil = require("components/spdamageutil")
 local SlowSources = require("kei/slow_sources")
 local Enchantment = require("kei/integrations/enchantment")
+local KeiEffectManager = require("kei/effect_manager")
 
 local function AddKeiActionHandler(action, state)
     AddStategraphActionHandler("wilson", ActionHandler(action, state))
@@ -948,9 +949,12 @@ AddStategraphState("wilson", State{
             inst.DynamicShadow:Enable(false)
         end
 
+        KeiEffectManager.Clear(inst, "teleport_start")
+
         local x, y, z = inst.Transform:GetWorldPosition()
         local fx = SpawnPrefab("hermitcrab_fx_med")
         if fx ~= nil then
+            KeiEffectManager.Register(inst, fx)
             fx.Transform:SetPosition(x, y, z)
         end
         inst:Hide()
@@ -974,6 +978,7 @@ AddStategraphState("wilson", State{
 
             local arrival_fx = SpawnPrefab("hermitcrab_fx_med")
             if arrival_fx ~= nil then
+                KeiEffectManager.Register(inst, arrival_fx)
                 arrival_fx.Transform:SetPosition(x, y, z)
             end
 
@@ -983,6 +988,9 @@ AddStategraphState("wilson", State{
                 inst.Transform:SetPosition(x, y, z)
             end
             inst:PushEvent("teleport_move")
+            if protocolslots ~= nil then
+                protocolslots:ScheduleRefresh()
+            end
             if inst.SnapCamera ~= nil then
                 inst:SnapCamera()
             end

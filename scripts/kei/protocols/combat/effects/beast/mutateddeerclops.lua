@@ -1,6 +1,7 @@
 -- 独眼晶体巨鹿协议：攻击后生成时缓圈，使范围内非友方单位时间流速减半。
 
 local SlowSources = require("kei/slow_sources")
+local KeiEffectManager = require("kei/effect_manager")
 
 local MUTATEDDEERCLOPS_AURA_SLOW_KEY = "kei_mutateddeerclops_aura"
 local MUTATEDDEERCLOPS_AURA_FOLLOW_PERIOD = FRAMES
@@ -120,6 +121,10 @@ function MutatedDeerclopsEffect.OnHitOther(slots, inst, data)
     end
 
     slots._kei_mutateddeerclops_aura = fx
+    KeiEffectManager.Register(inst, fx, "mutateddeerclops_aura", function()
+        slots._kei_mutateddeerclops_aura = nil
+        slots._kei_mutateddeerclops_aura_follow_task = nil
+    end)
     fx.Transform:SetPosition(inst.Transform:GetWorldPosition())
     if fx.GrowFX ~= nil then
         fx:GrowFX()
@@ -131,6 +136,7 @@ function MutatedDeerclopsEffect.OnHitOther(slots, inst, data)
                 fx.Transform:SetPosition(inst.Transform:GetWorldPosition())
             end
         end)
+    KeiEffectManager.SetTask(inst, "mutateddeerclops_aura", slots._kei_mutateddeerclops_aura_follow_task)
     slots._kei_mutateddeerclops_aura_task = inst:DoPeriodicTask(
         MUTATEDDEERCLOPS_AURA_UPDATE_PERIOD, function()
             if not fx:IsValid() then
@@ -153,10 +159,12 @@ function MutatedDeerclopsEffect.OnHitOther(slots, inst, data)
                 end
             end
         end, 0)
+    KeiEffectManager.AddTask(inst, "mutateddeerclops_aura", slots._kei_mutateddeerclops_aura_task)
     slots._kei_mutateddeerclops_aura_remove_task = inst:DoTaskInTime(
         TUNING.KEI_MUTATEDDEERCLOPS_AURA_DURATION or 5, function()
             MutatedDeerclopsEffect.Disable(slots, inst)
         end)
+    KeiEffectManager.AddTask(inst, "mutateddeerclops_aura", slots._kei_mutateddeerclops_aura_remove_task)
 end
 
 -- 关闭协议效果，并清理启用时注册的持续能力。
@@ -174,7 +182,9 @@ function MutatedDeerclopsEffect.Disable(slots, inst)
         slots._kei_mutateddeerclops_aura_remove_task = nil
     end
     if slots._kei_mutateddeerclops_aura ~= nil then
-        if slots._kei_mutateddeerclops_aura:IsValid() then
+        if not KeiEffectManager.Remove(inst, "mutateddeerclops_aura", "protocol_disable")
+            and slots._kei_mutateddeerclops_aura:IsValid()
+        then
             slots._kei_mutateddeerclops_aura:KillFX()
         end
         slots._kei_mutateddeerclops_aura = nil

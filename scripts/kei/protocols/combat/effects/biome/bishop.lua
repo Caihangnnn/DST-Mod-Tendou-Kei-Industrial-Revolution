@@ -1,6 +1,7 @@
 -- 发条主教协议（bishop）：协议存在期间始终获得羊角冻同款电击攻击。
 
 local BishopEffect = {}
+local KeiEffectManager = require("kei/effect_manager")
 
 local ELECTRIC_BUFF_NAME = "kei_bishop_electricattack"
 
@@ -80,10 +81,14 @@ function BishopEffect.Enable(slots, inst)
             local fx = SpawnPrefab("electricchargedfx")
             if fx ~= nil and fx.SetTarget ~= nil then
                 fx:SetTarget(inst)
+                KeiEffectManager.Register(inst, fx)
             end
         end
         SpawnChargeFx()
         slots._kei_bishop_charge_fx_task = inst:DoPeriodicTask(8, SpawnChargeFx)
+        KeiEffectManager.RegisterTask(inst, slots._kei_bishop_charge_fx_task, "bishop_charge_fx", function()
+            slots._kei_bishop_charge_fx_task = nil
+        end)
     end
 end
 
@@ -104,6 +109,7 @@ function BishopEffect.Disable(slots, inst)
         slots._kei_bishop_charge_fx_task:Cancel()
         slots._kei_bishop_charge_fx_task = nil
     end
+    KeiEffectManager.Release(inst, "bishop_charge_fx", "protocol_disable")
 
     if inst.RemoveDebuff ~= nil then
         inst:RemoveDebuff(ELECTRIC_BUFF_NAME)
