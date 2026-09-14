@@ -4,11 +4,6 @@ local Enchantment = require("kei/integrations/enchantment")
 
 local ArmorAnalysisEquipment = {}
 
--- 将协议槽编号映射到对应的隐藏装备槽，供虚拟护甲挂载使用
-local function HiddenEquipSlot(slot)
-    return EQUIPSLOTS["KEI_PROTOCOL_" .. tostring(slot)]
-end
-
 -- 根据护甲强化配方制作次数计算护甲吸收缩放：初始 50%，每次增加 10%。
 -- 将解析装备提供的护甲吸收率应用到虚拟护甲上
 -- 可使用协议数据中的 absorb 覆盖原护甲吸收，否则继承预制体自身的吸收率
@@ -29,8 +24,10 @@ local function ApplyArmorAbsorb(virtual, data, absorb_scale)
     end
 end
 
--- 清理虚拟护甲的交互与持久化能力，使其只作为隐藏装备存在
-local function CleanVirtualEquipment(item, equipslot)
+-- 清理虚拟护甲的交互与持久化能力，使其只作为 Kei 私有状态的载体存在。
+-- 虚拟护甲不再写入 inventory.equipslots；这能避免它参与原版装备栏重建、
+-- inventory classified 同步，以及其它模组对全局 EQUIPSLOTS 的遍历。
+local function CleanVirtualEquipment(item)
     item.persists = false
     item:AddTag("kei_virtual_equipment")
     item:AddTag("NOCLICK")
@@ -46,7 +43,8 @@ local function CleanVirtualEquipment(item, equipslot)
             item.components.equippable:SetOnUnequip(nil)
         end
         item.components.equippable.restrictedtag = nil
-        item.components.equippable.equipslot = equipslot
+        -- 保留预制体默认装备类型给其自身回调使用，但不把它映射到
+        -- Kei 的公共/隐藏装备槽。真正的归属由 protocolslots.virtual_equips 记录。
         item.components.equippable:SetPreventUnequipping(true)
     end
 
@@ -88,17 +86,50 @@ local function ScheduleRemove(item)
     end)
 end
 
--- 移除指定协议槽当前挂载的虚拟护甲，并从隐藏装备槽中卸下后清理实体
+local function AttachVirtualEquipment(owner, item)
+    if owner == nil or item == nil then
+        return false
+    end
+
+    local inventoryitem = item.components ~= nil and item.components.inventoryitem or nil
+    if inventoryitem ~= nil and inventoryitem.OnPutInInventory ~= nil then
+        inventoryitem:OnPutInInventory(owner)
+    end
+
+    local equippable = item.components ~= nil and item.components.equippable or nil
+    if equippable == nil or equippable.Equip == nil then
+        if inventoryitem ~= nil and inventoryitem.OnRemoved ~= nil then
+            inventoryitem:OnRemoved()
+        end
+        return false
+    end
+
+    equippable:Equip(owner, false)
+    return true
+end
+
+local function DetachVirtualEquipment(owner, item)
+    if item == nil then
+        return
+    end
+
+    local equippable = item.components ~= nil and item.components.equippable or nil
+    if equippable ~= nil and equippable.IsEquipped ~= nil and equippable:IsEquipped() then
+        equippable:Unequip(owner)
+    end
+
+    local inventoryitem = item.components ~= nil and item.components.inventoryitem or nil
+    if inventoryitem ~= nil and inventoryitem.OnRemoved ~= nil and inventoryitem:IsHeld() then
+        inventoryitem:OnRemoved()
+    end
+end
+
+-- 移除指定协议槽当前挂载的虚拟护甲，并从 Kei 私有状态中卸下后清理实体。
 function ArmorAnalysisEquipment.Remove(protocolslots, slot)
     local virtual = protocolslots.virtual_equips[slot]
     if virtual == nil then return end
 
-    local equipslot = HiddenEquipSlot(slot)
-    local inventory = protocolslots.inst.components.inventory
-    if inventory ~= nil and equipslot ~= nil and inventory:GetEquippedItem(equipslot) == virtual then
-        virtual.kei_allow_virtual_drop = true
-        inventory:Unequip(equipslot, true, true)
-    end
+    DetachVirtualEquipment(protocolslots.inst, virtual)
 
     if virtual:IsValid() then
         ScheduleRemove(virtual)
@@ -106,15 +137,14 @@ function ArmorAnalysisEquipment.Remove(protocolslots, slot)
     protocolslots.virtual_equips[slot] = nil
 end
 
--- 根据协议数据生成并装备指定槽位的虚拟护甲
+-- 根据协议数据生成并挂载指定槽位的虚拟护甲。
+-- 这里的“挂载”是 Kei 私有协议状态，不是 DST Inventory 的装备槽。
 -- 如果同源虚拟护甲已经存在，则只更新吸收率而不重复生成
 function ArmorAnalysisEquipment.Apply(protocolslots, entry)
     local data = entry.data
     local slot = entry.slot
-    local equipslot = HiddenEquipSlot(slot)
-    local inventory = protocolslots.inst.components.inventory
 
-    if data.source == nil or equipslot == nil or inventory == nil then
+    if data.source == nil then
         ArmorAnalysisEquipment.Remove(protocolslots, slot)
         return
     end
@@ -125,7 +155,9 @@ function ArmorAnalysisEquipment.Apply(protocolslots, entry)
         and current:IsValid()
         and current.kei_source_prefab == data.source
         and current.kei_enchantment_key == enchantment_key
-        and inventory:GetEquippedItem(equipslot) == current
+        and current.components ~= nil
+        and current.components.equippable ~= nil
+        and current.components.equippable:IsEquipped()
     then
         ApplyArmorAbsorb(current, data, AnalysisArmorUpgrade.GetAbsorbScale(protocolslots.inst))
         return
@@ -142,12 +174,21 @@ function ArmorAnalysisEquipment.Apply(protocolslots, entry)
     virtual.kei_source_prefab = data.source
     virtual.kei_enchantment_key = enchantment_key
     Enchantment.Apply(virtual, data.enchantments)
-    CleanVirtualEquipment(virtual, equipslot)
+    CleanVirtualEquipment(virtual)
     Enchantment.InstallVirtualArmorCallbacks(virtual)
     ApplyArmorAbsorb(virtual, data, AnalysisArmorUpgrade.GetAbsorbScale(protocolslots.inst))
 
-    inventory:Equip(virtual, nil, true)
-    if inventory:GetEquippedItem(equipslot) == virtual then
+    if AttachVirtualEquipment(protocolslots.inst, virtual) then
+        virtual._kei_virtual_protocol_slot = slot
+        virtual._kei_virtual_protocol_owner = protocolslots.inst
+        virtual._kei_virtual_protocol_onremove = function(item)
+            if protocolslots.virtual_equips[slot] == item then
+                protocolslots.virtual_equips[slot] = nil
+                protocolslots._protocol_state_dirty = true
+                protocolslots:ScheduleRefresh()
+            end
+        end
+        virtual:ListenForEvent("onremove", virtual._kei_virtual_protocol_onremove)
         protocolslots.virtual_equips[slot] = virtual
     else
         ScheduleRemove(virtual)

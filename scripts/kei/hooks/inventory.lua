@@ -1,5 +1,6 @@
 local GrowthRecipes = require("kei/growth_recipes")
 local MiniAlice = require("kei/mini_alice")
+local SpDamageUtil = require("components/spdamageutil")
 local FISH_CALL_RECIPE = "kei_fish_call_spell"
 local FULLMOON_RECIPE = "kei_fullmoon_spell"
 local NEWMOON_RECIPE = "kei_newmoon_spell"
@@ -160,6 +161,118 @@ local function IsSpentEquipment(item)
     return false
 end
 
+local function GetArmorAbsorption(item, attacker, weapon)
+    local armor = item ~= nil and item.components ~= nil and item.components.armor or nil
+    if armor == nil then
+        return 0
+    end
+
+    local value = nil
+    if armor.GetAbsorption ~= nil then
+        local ok, result = pcall(armor.GetAbsorption, armor, attacker, weapon)
+        if ok then
+            value = result
+        end
+    end
+    return math.min(1, math.max(0, tonumber(value ~= nil and value or armor.absorb_percent) or 0))
+end
+
+-- 解析护甲不再进入 inventory.equipslots。为了保持原版“护甲取最大吸收率”
+-- 的语义，把私有协议护甲和真实装备的吸收率合并成一个输入缩放，再交给
+-- 原版 ApplyDamage 处理真实装备、特殊伤害和耐久逻辑。
+local function ScaleDamageForVirtualArmor(inventory, damage, attacker, weapon)
+    if type(damage) ~= "number"
+        or inventory == nil
+        or inventory.inst == nil
+        or not inventory.inst:HasTag("kei")
+    then
+        return damage
+    end
+
+    local slots = inventory.inst.components ~= nil
+        and inventory.inst.components.kei_protocolslots
+        or nil
+    if slots == nil or slots.GetVirtualArmorAbsorption == nil then
+        return damage
+    end
+
+    local virtual_absorb = math.min(1, math.max(0,
+        tonumber(slots:GetVirtualArmorAbsorption(attacker, weapon)) or 0
+    ))
+    if virtual_absorb <= 0 then
+        return damage
+    end
+
+    local real_absorb = 0
+    for _, item in pairs(inventory.equipslots or {}) do
+        real_absorb = math.max(real_absorb, GetArmorAbsorption(item, attacker, weapon))
+    end
+    if real_absorb >= virtual_absorb then
+        return damage
+    end
+
+    local denominator = 1 - real_absorb
+    if denominator <= 0 then
+        return damage
+    end
+
+    local multiplier = (1 - virtual_absorb) / denominator
+    return damage * math.min(1, math.max(0, multiplier))
+end
+
+local function ApplyVirtualDamageTypeResist(inventory, damage, attacker, weapon, spdamage)
+    local slots = inventory ~= nil
+        and inventory.inst ~= nil
+        and inventory.inst.components ~= nil
+        and inventory.inst.components.kei_protocolslots
+        or nil
+    if slots == nil or slots.GetVirtualDamageTypeMultiplier == nil then
+        return damage, spdamage
+    end
+
+    local multiplier = slots:GetVirtualDamageTypeMultiplier(attacker, weapon)
+    if type(multiplier) ~= "number" then
+        multiplier = 1
+    end
+
+    damage = damage * multiplier
+    if spdamage ~= nil then
+        for sptype, value in pairs(spdamage) do
+            if type(value) == "number" then
+                spdamage[sptype] = value * multiplier
+            end
+        end
+    end
+    return damage, spdamage
+end
+
+local function ApplyVirtualSpDefense(inventory, spdamage)
+    if spdamage == nil then
+        return
+    end
+
+    local slots = inventory ~= nil
+        and inventory.inst ~= nil
+        and inventory.inst.components ~= nil
+        and inventory.inst.components.kei_protocolslots
+        or nil
+    if slots == nil or slots.GetVirtualSpDefenseForType == nil then
+        return
+    end
+
+    for sptype, damage in pairs(spdamage) do
+        if type(damage) == "number" and damage > 0 then
+            local defense = slots:GetVirtualSpDefenseForType(sptype)
+            if type(defense) == "number" and defense > 0 then
+                spdamage[sptype] = math.max(0, damage - defense)
+                if spdamage[sptype] <= 0 then
+                    spdamage[sptype] = nil
+                end
+            end
+        end
+    end
+end
+
 local function IsCraftingContainer(container)
     return container ~= nil
         and container.excludefromcrafting ~= true
@@ -246,6 +359,199 @@ AddComponentPostInit("inventory", function(self)
     local old_RemoveItem = self.RemoveItem
     local old_Unequip = self.Unequip
     local old_Equip = self.Equip
+    local old_ApplyDamage = self.ApplyDamage
+    local old_HasAnyEquipment = self.HasAnyEquipment
+    local old_ForEachEquipment = self.ForEachEquipment
+    local old_ArmorHasTag = self.ArmorHasTag
+    local old_IsWearingArmor = self.IsWearingArmor
+    local old_EquipHasSpDefenseForType = self.EquipHasSpDefenseForType
+    local old_IsInsulated = self.IsInsulated
+    local old_GetEquippedMoistureRate = self.GetEquippedMoistureRate
+    local old_GetWaterproofness = self.GetWaterproofness
+    local old_EquipHasTag = self.EquipHasTag
+
+    local function ForEachVirtualEquipment(fn, ...)
+        local slots = self.inst.components ~= nil
+            and self.inst.components.kei_protocolslots
+            or nil
+        if slots ~= nil and slots.ForEachVirtualEquipment ~= nil then
+            slots:ForEachVirtualEquipment(fn, ...)
+        end
+    end
+
+    function self:HasAnyEquipment(...)
+        if old_HasAnyEquipment ~= nil and old_HasAnyEquipment(self, ...) then
+            return true
+        end
+
+        local found = false
+        ForEachVirtualEquipment(function()
+            found = true
+        end)
+        if found then
+            return true
+        end
+        return false
+    end
+
+    -- 解析装备不写入 inventory.equipslots。把它们只追加到原版的遍历型
+    -- 查询中，使 setbonus、战斗视觉和第三方装备扫描仍能看到实际的护甲。
+    -- 这里不包含仍占用真实 HANDS 槽的虚拟手部装备，避免重复处理。
+    function self:ForEachEquipment(fn, ...)
+        local result = old_ForEachEquipment(self, fn, ...)
+        ForEachVirtualEquipment(fn, ...)
+        return result
+    end
+
+    function self:IsWearingArmor(...)
+        if old_IsWearingArmor ~= nil and old_IsWearingArmor(self, ...) then
+            return true
+        end
+
+        local found = false
+        ForEachVirtualEquipment(function(item)
+            if not found
+                and item.components ~= nil
+                and item.components.armor ~= nil
+            then
+                found = true
+            end
+        end)
+        if found then
+            return true
+        end
+    end
+
+    function self:ArmorHasTag(tag, ...)
+        if old_ArmorHasTag ~= nil and old_ArmorHasTag(self, tag, ...) then
+            return true
+        end
+
+        local found = false
+        ForEachVirtualEquipment(function(item)
+            if not found
+                and item.components ~= nil
+                and item.components.armor ~= nil
+                and item:HasTag(tag)
+            then
+                found = true
+            end
+        end)
+        if found then
+            return true
+        end
+    end
+
+    function self:EquipHasSpDefenseForType(sptype, ...)
+        if old_EquipHasSpDefenseForType ~= nil
+            and old_EquipHasSpDefenseForType(self, sptype, ...)
+        then
+            return true
+        end
+
+        local found = false
+        ForEachVirtualEquipment(function(item)
+            if not found and SpDamageUtil.GetSpDefenseForType(item, sptype) > 0 then
+                found = true
+            end
+        end)
+        if found then
+            return true
+        end
+    end
+
+    function self:IsInsulated(...)
+        -- ForceNoInsulated is an explicit override and must also suppress
+        -- virtual equipment, just as it suppresses real equipment.
+        if self.force_no_insulation then
+            return false
+        end
+        if old_IsInsulated ~= nil and old_IsInsulated(self, ...) then
+            return true
+        end
+
+        local found = false
+        ForEachVirtualEquipment(function(item)
+            local equippable = item.components ~= nil and item.components.equippable or nil
+            if not found and equippable ~= nil and equippable.IsInsulated ~= nil
+                and equippable:IsInsulated()
+            then
+                found = true
+            end
+        end)
+        if found then
+            return true
+        end
+        return false
+    end
+
+    function self:GetEquippedMoistureRate(slot, ...)
+        local moisture, max = old_GetEquippedMoistureRate(self, slot, ...)
+        -- A concrete slot refers to inventory.itemslots in the vanilla API;
+        -- private protocol slots have no corresponding public item slot.
+        if slot ~= nil then
+            return moisture, max
+        end
+
+        ForEachVirtualEquipment(function(item)
+            local equippable = item.components ~= nil and item.components.equippable or nil
+            if equippable ~= nil and equippable.GetEquippedMoisture ~= nil then
+                local data = equippable:GetEquippedMoisture()
+                if data ~= nil then
+                    moisture = moisture + (tonumber(data.moisture) or 0)
+                    max = max + (tonumber(data.max) or 0)
+                end
+            end
+        end)
+        return moisture, max
+    end
+
+    function self:GetWaterproofness(slot, ...)
+        local waterproofness = old_GetWaterproofness(self, slot, ...)
+        if slot ~= nil then
+            return waterproofness
+        end
+
+        if self.inst.components ~= nil
+            and self.inst.components.moisture ~= nil
+            and self.inst.components.moisture.GetWaterproofInventory ~= nil
+            and self.inst.components.moisture:GetWaterproofInventory()
+        then
+            return 1
+        end
+
+        ForEachVirtualEquipment(function(item)
+            local waterproofer = item.components ~= nil and item.components.waterproofer or nil
+            if waterproofer ~= nil and waterproofer.GetEffectiveness ~= nil then
+                waterproofness = waterproofness + (tonumber(waterproofer:GetEffectiveness()) or 0)
+            end
+        end)
+        return waterproofness
+    end
+
+    -- 第三方装备的功能标签（例如 functional medal 的 nooverheat）仍然
+    -- 通过 Inventory:EquipHasTag() 查询。解析护甲不在 equipslots，因此将
+    -- Kei 私有虚拟装备作为额外查询源，同时保留其它模组已经安装的包装。
+    function self:EquipHasTag(tag, ...)
+        if old_EquipHasTag ~= nil and old_EquipHasTag(self, tag, ...) then
+            return true
+        end
+
+        local slots = self.inst.components ~= nil
+            and self.inst.components.kei_protocolslots
+            or nil
+        if slots ~= nil and slots.ForEachVirtualEquipment ~= nil then
+            local found = false
+            slots:ForEachVirtualEquipment(function(item)
+                if not found and item:HasTag(tag) then
+                    found = true
+                end
+            end)
+            if found then
+                return true
+            end
+        end
+    end
 
     function self:GetCraftingIngredient(item, amount)
         local overflow = self:GetOverflowContainer()
@@ -325,6 +631,25 @@ AddComponentPostInit("inventory", function(self)
         end
 
         return old_Equip(self, item, old_to_active, no_animation, force_ui_anim)
+    end
+
+    function self:ApplyDamage(damage, attacker, weapon, spdamage, ...)
+        local slots = self.inst.components ~= nil
+            and self.inst.components.kei_protocolslots
+            or nil
+        if slots ~= nil
+            and slots.TryResistDamage ~= nil
+            and slots:TryResistDamage(damage, attacker, weapon)
+        then
+            return 0, nil
+        end
+
+        damage, spdamage = ApplyVirtualDamageTypeResist(
+            self, damage, attacker, weapon, spdamage
+        )
+        ApplyVirtualSpDefense(self, spdamage)
+        damage = ScaleDamageForVirtualArmor(self, damage, attacker, weapon)
+        return old_ApplyDamage(self, damage, attacker, weapon, spdamage, ...)
     end
 
     function self:DropItem(item, wholestack, randomdir, pos, keepoverstacked)

@@ -13,24 +13,29 @@ end
 
 local function GetArmorAbsorption(player)
     local inventory = player ~= nil and player.components ~= nil and player.components.inventory or nil
-    if inventory == nil then
-        return 0
-    end
+    local protocolslots = player ~= nil and player.components ~= nil and player.components.kei_protocolslots or nil
 
     local absorption = 0
-    for _, item in pairs(inventory.equipslots or {}) do
-        local armor = item ~= nil and item.components ~= nil and item.components.armor or nil
-        if armor ~= nil then
-            local value = nil
-            if armor.GetAbsorption ~= nil then
-                local ok, result = pcall(armor.GetAbsorption, armor, nil, nil)
-                if ok then
-                    value = result
+    if inventory ~= nil then
+        for _, item in pairs(inventory.equipslots or {}) do
+            local armor = item ~= nil and item.components ~= nil and item.components.armor or nil
+            if armor ~= nil then
+                local value = nil
+                if armor.GetAbsorption ~= nil then
+                    local ok, result = pcall(armor.GetAbsorption, armor, nil, nil)
+                    if ok then
+                        value = result
+                    end
                 end
+                value = value ~= nil and value or armor.absorb_percent
+                absorption = math.max(absorption, Clamp01(value))
             end
-            value = value ~= nil and value or armor.absorb_percent
-            absorption = math.max(absorption, Clamp01(value))
         end
+    end
+
+    -- Kei 的解析护甲是协议组件管理的私有装备，不在原版 equipslots 中。
+    if protocolslots ~= nil and protocolslots.GetVirtualArmorAbsorption ~= nil then
+        absorption = math.max(absorption, Clamp01(protocolslots:GetVirtualArmorAbsorption(nil, nil)))
     end
     return absorption
 end

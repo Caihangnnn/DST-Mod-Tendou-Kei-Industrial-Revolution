@@ -9,6 +9,7 @@ local HandAnalysisInheritance = require("kei/protocols/analysis/hand_analysis_in
 local ArmorAnalysisEquipment = require("kei/protocols/analysis/armor_analysis_equipment")
 local MiniAlice = require("kei/mini_alice")
 local BeastCommon = require("kei/protocols/combat/effects/beast/_beast_common")
+local SpDamageUtil = require("components/spdamageutil")
 
 local LIFE_PROTOCOLS = LifeProtocolDefs.LIFE_PROTOCOLS
 local BASIC_ATTRIBUTE_PROTOCOLS = BasicAttributeProtocolDefs.BASIC_ATTRIBUTE_PROTOCOLS
@@ -78,6 +79,7 @@ end
 
 local function GetArmorAbsorption(inst)
     local inventory = inst ~= nil and inst.components ~= nil and inst.components.inventory or nil
+    local protocolslots = inst ~= nil and inst.components ~= nil and inst.components.kei_protocolslots or nil
     local absorption = 0
     if inventory ~= nil then
         for _, item in pairs(inventory.equipslots or {}) do
@@ -92,6 +94,11 @@ local function GetArmorAbsorption(inst)
                 absorption = math.max(absorption, tonumber(value) or 0)
             end
         end
+    end
+
+    -- 解析护甲由 Kei 私有协议槽管理，不进入 inventory.equipslots。
+    if protocolslots ~= nil and protocolslots.GetVirtualArmorAbsorption ~= nil then
+        absorption = math.max(absorption, protocolslots:GetVirtualArmorAbsorption())
     end
     return math.min(math.max(absorption, 0), 1)
 end
@@ -1653,6 +1660,123 @@ end
 
 function KeiProtocolSlots:ClearVirtualEquips(keep)
     return ArmorAnalysisEquipment.Clear(self, keep)
+end
+
+-- 解析护甲的唯一查询入口。虚拟护甲是协议组件的私有状态，不能再通过
+-- Inventory:GetEquippedItem() 或遍历 inventory.equipslots 间接发现。
+function KeiProtocolSlots:GetVirtualEquipment(slot)
+    local item = self.virtual_equips ~= nil and self.virtual_equips[slot] or nil
+    if item ~= nil and (not item:IsValid() or item.components == nil
+        or item.components.equippable == nil
+        or not item.components.equippable:IsEquipped())
+    then
+        return nil
+    end
+    return item
+end
+
+function KeiProtocolSlots:ForEachVirtualEquipment(fn, ...)
+    if type(fn) ~= "function" then
+        return
+    end
+
+    -- 查询回调可能触发协议刷新，刷新又可能替换 virtual_equips。先建立
+    -- 快照，避免在回调中增删表项时跳过装备、重复调用或污染当前遍历。
+    local snapshot = {}
+    for slot, item in pairs(self.virtual_equips or {}) do
+        if item ~= nil and item:IsValid()
+            and item.components ~= nil
+            and item.components.equippable ~= nil
+            and item.components.equippable:IsEquipped()
+        then
+            snapshot[#snapshot + 1] = { slot = slot, item = item }
+        end
+    end
+
+    for _, entry in ipairs(snapshot) do
+        if entry.item:IsValid()
+            and entry.item.components ~= nil
+            and entry.item.components.equippable ~= nil
+            and entry.item.components.equippable:IsEquipped()
+        then
+            fn(entry.item, entry.slot, ...)
+        end
+    end
+end
+
+function KeiProtocolSlots:GetVirtualArmorAbsorption(attacker, weapon)
+    local absorption = 0
+    self:ForEachVirtualEquipment(function(item)
+        local armor = item.components ~= nil and item.components.armor or nil
+        if armor ~= nil then
+            local value = nil
+            if armor.GetAbsorption ~= nil then
+                local ok, result = pcall(armor.GetAbsorption, armor, attacker, weapon)
+                if ok then
+                    value = result
+                end
+            end
+            value = value ~= nil and value or armor.absorb_percent
+            absorption = math.max(absorption, tonumber(value) or 0)
+        end
+    end)
+    return math.min(math.max(absorption, 0), 1)
+end
+
+-- 与原版 Inventory:ApplyDamage 相同，伤害类型抗性会对普通伤害和特殊
+-- 伤害同时生效。解析装备不在 inventory.equipslots，因此由这里统一汇总
+-- 虚拟装备上的 damagetyperesist 组件。
+function KeiProtocolSlots:GetVirtualDamageTypeMultiplier(attacker, weapon)
+    local multiplier = 1
+    self:ForEachVirtualEquipment(function(item)
+        local resist = item.components ~= nil and item.components.damagetyperesist or nil
+        if resist ~= nil and resist.GetResist ~= nil then
+            local ok, value = pcall(resist.GetResist, resist, attacker, weapon)
+            if ok and type(value) == "number" then
+                multiplier = multiplier * value
+            end
+        end
+    end)
+    return multiplier
+end
+
+-- Inventory:ApplyDamage 对每种特殊伤害把所有装备提供的防御值相加后
+-- 扣除。虚拟装备没有公共装备槽，所以这里返回等价的总防御值；具体扣除
+-- 在 inventory hook 中完成，再交回原版处理真实装备的部分。
+function KeiProtocolSlots:GetVirtualSpDefenseForType(sptype)
+    local defense = 0
+    self:ForEachVirtualEquipment(function(item)
+        local value = SpDamageUtil.GetSpDefenseForType(item, sptype)
+        if type(value) == "number" and value > 0 then
+            defense = defense + value
+        end
+    end)
+    return defense
+end
+
+-- 原版 Inventory:ApplyDamage 会先检查装备上的 resistance 组件，再进行护甲
+-- 吸收计算。解析护甲已经不在 inventory.equipslots 中，因此必须由协议组件
+-- 显式执行同样的短路逻辑；否则 armorskeleton 的充能护盾永远不会拦截攻击。
+function KeiProtocolSlots:TryResistDamage(damage, attacker, weapon)
+    local resisted = false
+    self:ForEachVirtualEquipment(function(item)
+        if resisted then
+            return
+        end
+
+        local resistance = item.components ~= nil and item.components.resistance or nil
+        if resistance ~= nil
+            and resistance.HasResistance ~= nil
+            and resistance:HasResistance(attacker, weapon)
+            and (resistance.ShouldResistDamage == nil or resistance:ShouldResistDamage())
+        then
+            if resistance.ResistDamage ~= nil then
+                resistance:ResistDamage(damage, attacker)
+            end
+            resisted = true
+        end
+    end)
+    return resisted
 end
 
 function KeiProtocolSlots:RemoveHandVirtualEquip()

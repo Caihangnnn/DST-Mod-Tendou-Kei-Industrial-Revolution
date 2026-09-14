@@ -48,6 +48,35 @@ end
 AddComponentPostInit("temperature", function(self)
     local old_SetTemperature = self.SetTemperature
     local old_DoDelta = self.DoDelta
+    local old_GetInsulation = self.GetInsulation
+
+    -- Temperature:GetInsulation() 原版只遍历 inventory.equipslots。解析的
+    -- 蓝晶帽仍保留 insulator 组件，但由 Kei 私有协议槽持有，因此需要把
+    -- 其保温值补入原版结果。
+    function self:GetInsulation(...)
+        local winter_insulation, summer_insulation = old_GetInsulation(self, ...)
+        local slots = self.inst.components ~= nil
+            and self.inst.components.kei_protocolslots
+            or nil
+        if slots == nil or slots.ForEachVirtualEquipment == nil then
+            return winter_insulation, summer_insulation
+        end
+
+        slots:ForEachVirtualEquipment(function(item)
+            local insulator = item.components ~= nil and item.components.insulator or nil
+            if insulator ~= nil and insulator.GetInsulation ~= nil then
+                local value, insulation_type = insulator:GetInsulation()
+                value = math.max(0, tonumber(value) or 0)
+                if insulation_type == SEASONS.WINTER then
+                    winter_insulation = winter_insulation + value
+                elseif insulation_type == SEASONS.SUMMER then
+                    summer_insulation = summer_insulation + value
+                end
+            end
+        end)
+
+        return math.max(0, winter_insulation), math.max(0, summer_insulation)
+    end
 
     function self:SetTemperature(value, ...)
         if type(value) == "number" and HasKeiDragonflyOverheatImmunity(self.inst) then
@@ -114,4 +143,3 @@ AddComponentPostInit("freezable", function(self)
         end
     end
 end)
-
