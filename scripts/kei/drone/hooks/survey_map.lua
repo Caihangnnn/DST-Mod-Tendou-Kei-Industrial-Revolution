@@ -17,6 +17,14 @@ local function IsKeiSurveyor(drone, doer)
     return userid ~= nil and userid ~= "" and userid == doer.userid
 end
 
+local function IsMapControllableSurveyor(drone)
+    if drone == nil or not drone:IsValid() or drone.sg == nil then
+        return false
+    end
+    local state = drone.sg.currentstate
+    return state ~= nil and state.name == "flight"
+end
+
 local function GetSurveyorFromMapIcon(mapent)
     if mapent ~= nil and mapent:HasTag("globalmapicon") then
         return mapent._target
@@ -50,7 +58,10 @@ ACTIONS.MAPSCOUTSELECT_MAP.maponly_checkvalidpos_fn = function(act)
             return false, "NOTARGET"
         end
         local drone = GetSurveyorFromMapIcon(mapent)
-        if drone ~= nil and not IsKeiSurveyor(drone, act.doer) then
+        if drone ~= nil
+            and (not IsKeiSurveyor(drone, act.doer)
+                or not IsMapControllableSurveyor(drone))
+        then
             return false, "NOTARGET"
         end
         return true, nil, x, z, mapent
@@ -86,7 +97,9 @@ ACTIONS.MAPSCOUT_MAP.maponly_checkvalidpos_fn = function(act)
         local drone = GetSurveyorFromMapIcon(mapent)
         if mapent == nil
             or mapent.GetDroneRange == nil
-            or (drone ~= nil and not IsKeiSurveyor(drone, act.doer))
+            or (drone ~= nil
+                and (not IsKeiSurveyor(drone, act.doer)
+                    or not IsMapControllableSurveyor(drone)))
         then
             return false
         end

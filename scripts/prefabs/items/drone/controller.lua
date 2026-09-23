@@ -3,6 +3,7 @@ local RotorSurveyRegistry = require("kei/drone/registry")
 local RotorSurveySkills = require("kei/drone/skills")
 
 local DRONE_CONTROL_WHEEL_RADIUS = 100
+local ROTOR_ICON_ATLAS = "images/inventoryimages/kei_items.xml"
 local StopDroneFollow
 
 local function RequireRotorSkill(doer, skill)
@@ -27,6 +28,21 @@ local function IsDroneBoundToOwner(drone, owner)
         and owner ~= nil
         and (drone._kei_drone_owner == owner
             or (owner.userid ~= nil and drone._kei_drone_owner_userid == owner.userid))
+end
+
+local function IsDroneInState(drone, state_name)
+    if drone == nil or not drone:IsValid() or drone.sg == nil then
+        return false
+    end
+    local state = drone.sg.currentstate
+    return state ~= nil and state.name == state_name
+end
+
+local function IsDroneAirborne(drone)
+    return IsDroneInState(drone, "flight")
+        or IsDroneInState(drone, "projection")
+        or IsDroneInState(drone, "projection_loop")
+        or IsDroneInState(drone, "projection_pst")
 end
 
 local function OnControlWheelClose(inst)
@@ -356,17 +372,17 @@ local function ApplyEquipVisuals(inst, owner)
 
     owner.AnimState:OverrideSymbol(
         "swap_object",
-        "swap_wx78_drone_zap_remote",
+        "kei_drone_zap_remote",
         "swap_drone_zap_remote"
     )
     owner.AnimState:OverrideSymbol(
         "drone_zap_remote_parts",
-        "swap_wx78_drone_zap_remote",
+        "kei_drone_zap_remote",
         "drone_zap_remote_parts"
     )
     owner.AnimState:Show("ARM_carry")
     owner.AnimState:Hide("ARM_normal")
-    inst.components.inventoryitem:ChangeImageName("wx78_drone_zap_remote_held")
+    inst.components.inventoryitem:ChangeImageName("kei_drone_zap_remote_open")
 end
 
 local function IsEquippedBy(inst, owner)
@@ -424,7 +440,7 @@ local function OnUnequip(inst, owner)
         owner.AnimState:Hide("ARM_carry")
         owner.AnimState:Show("ARM_normal")
     end
-    inst.components.inventoryitem:ChangeImageName("wx78_drone_zap_remote")
+    inst.components.inventoryitem:ChangeImageName("kei_drone_zap_remote_close")
 end
 
 local function ToggleBoundDrone(inst, doer)
@@ -434,19 +450,26 @@ local function ToggleBoundDrone(inst, doer)
 
     local drone = FindBoundDrone(inst, doer)
     if drone ~= nil then
-        if drone._kei_drone_pilot == doer then
-            drone._kei_drone_pilot = nil
-            if inst._kei_pilot_active_net ~= nil then
-                inst._kei_pilot_active_net:set(false)
+        local state = drone.sg ~= nil and drone.sg.currentstate or nil
+        local state_name = state ~= nil and state.name or nil
+        if state_name == "dormant" then
+            drone.sg:GoToState("takeoff")
+            return true
+        elseif state_name == "flight"
+            or state_name == "projection"
+            or state_name == "projection_loop"
+            or state_name == "projection_pst"
+        then
+            if inst.components ~= nil and inst.components["drone/beam"] ~= nil then
+                inst.components["drone/beam"]:Stop()
             end
-            doer._kei_rotor_pilot_drone = nil
-            if doer.sg ~= nil then
-                doer.sg:GoToState("kei_rotor_drone_pilot_stop", true)
+            if drone.components ~= nil and drone.components.mapdeliverable ~= nil then
+                drone.components.mapdeliverable:Stop()
             end
+            drone.sg:GoToState("landing")
+            return true
         end
-        SetBoundDrone(inst, nil, doer)
-        drone:Remove()
-        return true
+        return false
     end
 
     local x, _, z = doer.Transform:GetWorldPosition()
@@ -455,28 +478,17 @@ local function ToggleBoundDrone(inst, doer)
         return false
     end
 
-    drone.Physics:Teleport(x, 1.5, z)
+    drone.Physics:Teleport(x, 0.01, z)
     SetBoundDrone(inst, drone, doer)
-    drone.sg:GoToState("deploy")
+    drone.sg:GoToState("takeoff")
     return true
 end
 
 local function EnsureBoundDrone(inst, doer)
-    local drone = FindBoundDrone(inst, doer)
-    if drone ~= nil then
-        return drone
-    end
-
-    local x, _, z = doer.Transform:GetWorldPosition()
-    drone = SpawnPrefab("kei_rotor_surveyor")
-    if drone == nil then
-        return nil
-    end
-
-    drone.Physics:Teleport(x, 1.5, z)
-    SetBoundDrone(inst, drone, doer)
-    drone.sg:GoToState("deploy")
-    return drone
+    -- Non takeoff/landing skills may only operate on the already deployed
+    -- drone. In particular, dormant drones must not be respawned or woken by
+    -- follow, pilot, or beam actions.
+    return FindBoundDrone(inst, doer)
 end
 
 StopDroneFollow = function(inst, owner)
@@ -490,6 +502,25 @@ StopDroneFollow = function(inst, owner)
     SetFollowActive(inst, false)
 end
 
+local function RecallBoundDrone(inst, owner)
+    if not TheWorld.ismastersim or inst == nil or owner == nil then
+        return false
+    end
+
+    local drone = FindBoundDrone(inst, owner)
+    if drone == nil then
+        return false
+    end
+
+    StopPilotForOwner(inst, owner)
+    StopDroneFollow(inst, owner)
+    SetBoundDrone(inst, nil, owner)
+    if drone:IsValid() then
+        drone:Remove()
+    end
+    return true
+end
+
 local function ToggleDroneFollow(inst, doer)
     if not TheWorld.ismastersim or inst == nil or doer == nil then
         return false
@@ -499,7 +530,7 @@ local function ToggleDroneFollow(inst, doer)
     end
 
     local drone = EnsureBoundDrone(inst, doer)
-    if drone == nil then
+    if drone == nil or not IsDroneAirborne(drone) then
         return false
     end
 
@@ -532,15 +563,8 @@ local function ToggleDronePilot(inst, doer)
     end
 
     local drone = FindBoundDrone(inst, doer)
-    if drone == nil then
-        -- 第二技能第一次使用只负责召唤无人机，下一次使用才进入驾驶。
-        if not ToggleBoundDrone(inst, doer) then
-            return false
-        end
-        drone = FindBoundDrone(inst, doer)
-        if drone == nil then
-            return false
-        end
+    if drone == nil or not IsDroneAirborne(drone) then
+        return false
     end
 
     if drone._kei_rotor_follow_owner == doer then
@@ -617,7 +641,7 @@ local function ActivateRotorBeam(inst, doer, beam_name)
     end
 
     local drone = EnsureBoundDrone(inst, doer)
-    if drone == nil or drone.SetSkillBeam == nil then
+    if drone == nil or not IsDroneAirborne(drone) or drone.SetSkillBeam == nil then
         return false
     end
 
@@ -626,6 +650,9 @@ local function ActivateRotorBeam(inst, doer, beam_name)
         if inst.components["drone/beam"] ~= nil then
             inst.components["drone/beam"]:Stop()
         end
+        if IsDroneInState(drone, "projection_loop") then
+            drone.sg:GoToState("projection_pst")
+        end
     else
         if inst.components["drone/beam"] == nil
             or not inst.components["drone/beam"]:Start(beam_name, drone, doer)
@@ -633,6 +660,9 @@ local function ActivateRotorBeam(inst, doer, beam_name)
             return false
         end
         drone:SetSkillBeam(beam_name)
+        if IsDroneInState(drone, "flight") then
+            drone.sg:GoToState("projection")
+        end
     end
     return true
 end
@@ -641,31 +671,33 @@ local function IsRotorSkillUnlocked(owner, skill)
     return skill == nil or RotorSurveySkills.HasSkill(owner, skill)
 end
 
-local function MakeRotorSkillAnim(anim, skill, loop)
+local function MakeRotorSkillAnim(icon, skill, loop)
     return function(owner)
         if not IsRotorSkillUnlocked(owner, skill) then
-            return { anim = "icon_target_disabled" }
+            return { anim = icon.."_disable" }
         end
-        return { anim = anim, loop = loop }
+        return {
+            anim = loop and icon.."_foucs" or icon,
+            loop = loop,
+        }
     end
 end
 
 local function MakeDroneControlSpell(label, icon, pilot, skill)
-    icon = "icon_target"
     local spell = {
         label = label,
-        bank = "spell_icons_winona",
-        build = "spell_icons_winona",
+        bank = "drone_icons_kei",
+        build = "drone_icons_kei",
         anims = {
             idle = MakeRotorSkillAnim(icon, skill),
-            focus = MakeRotorSkillAnim(icon.."_focus", skill, true),
-            down = MakeRotorSkillAnim(icon.."_pressed", skill),
-            disabled = { anim = icon.."_disabled" },
+            focus = MakeRotorSkillAnim(icon, skill, true),
+            down = { anim = icon.."_pressed" },
+            disabled = { anim = icon.."_disable" },
         },
         execute = pilot and CastDronePilot or function() return true end,
         kei_skill = skill,
         kei_rotor_ring = 1,
-        widget_scale = 0.6,
+        widget_scale = 0.4,
     }
     if pilot then
         spell.onselect = function(inst)
@@ -679,7 +711,7 @@ local function MakeDroneControlSpell(label, icon, pilot, skill)
 end
 
 local function MakeRotorBeamSpell(label, beam_name, ring)
-    local spell = MakeDroneControlSpell(label, "icon_target", false, beam_name)
+    local spell = MakeDroneControlSpell(label, "icon_"..beam_name, false, beam_name)
     if ring ~= nil then
         spell.kei_rotor_ring = ring
     end
@@ -697,7 +729,7 @@ end
 
 local DRONE_CONTROL_WHEEL_ITEMS = {
     {
-        label = "启用/关闭",
+        label = "起飞/降落",
         onselect = function(inst)
             inst.components.spellbook:SetSpellAction(ACTIONS.KEI_ROTOR_CONTROL)
             if TheWorld.ismastersim then
@@ -705,19 +737,19 @@ local DRONE_CONTROL_WHEEL_ITEMS = {
             end
         end,
         execute = CastToggleDrone,
-        bank = "spell_icons_winona",
-        build = "spell_icons_winona",
+        bank = "drone_icons_kei",
+        build = "drone_icons_kei",
         anims = {
-            idle = MakeRotorSkillAnim("icon_target", "enable_drone"),
-            focus = MakeRotorSkillAnim("icon_target_focus", "enable_drone", true),
-            down = MakeRotorSkillAnim("icon_target_pressed", "enable_drone"),
-            disabled = { anim = "icon_target_disabled" },
+            idle = MakeRotorSkillAnim("icon_enble_drone", "enable_drone"),
+            focus = MakeRotorSkillAnim("icon_enble_drone", "enable_drone", true),
+            down = { anim = "icon_enble_drone_pressed" },
+            disabled = { anim = "icon_enble_drone_disable" },
         },
-        widget_scale = 0.6,
+        widget_scale = 0.4,
         kei_skill = "enable_drone",
         kei_rotor_ring = 1,
     },
-    MakeDroneControlSpell("驾驶", "icon_boost", true, "pilot"),
+    MakeDroneControlSpell("驾驶", "icon_pilot", true, "pilot"),
     MakeRotorBeamSpell("苏生光束", "resurrection"),
     MakeRotorBeamSpell("治愈光束", "heal"),
     MakeRotorBeamSpell("强化光束", "strengthen"),
@@ -729,13 +761,13 @@ local DRONE_CONTROL_WHEEL_ITEMS = {
 local function MakeRotorPlaceholderSpell(label, skill)
     return {
         label = label,
-        bank = "spell_icons_winona",
-        build = "spell_icons_winona",
+        bank = "drone_icons_kei",
+        build = "drone_icons_kei",
         anims = {
-            idle = MakeRotorSkillAnim("icon_target", skill),
-            focus = MakeRotorSkillAnim("icon_target_focus", skill, true),
-            down = MakeRotorSkillAnim("icon_target_pressed", skill),
-            disabled = { anim = "icon_target_disabled" },
+            idle = MakeRotorSkillAnim("icon_disable", skill),
+            focus = { anim = "icon_disable", loop = true },
+            down = { anim = "icon_disable" },
+            disabled = { anim = "icon_disable" },
         },
         onselect = function(inst)
             inst.components.spellbook:SetSpellAction(ACTIONS.KEI_ROTOR_CONTROL)
@@ -751,20 +783,20 @@ local function MakeRotorPlaceholderSpell(label, skill)
         execute = CastControllerSpell,
         kei_skill = skill,
         kei_rotor_ring = 2,
-        widget_scale = 0.6,
+        widget_scale = 0.4,
     }
 end
 
 local function MakeRotorFollowSpell()
     return {
         label = "跟随",
-        bank = "spell_icons_winona",
-        build = "spell_icons_winona",
+        bank = "drone_icons_kei",
+        build = "drone_icons_kei",
         anims = {
-            idle = MakeRotorSkillAnim("icon_target", "follow"),
-            focus = MakeRotorSkillAnim("icon_target_focus", "follow", true),
-            down = MakeRotorSkillAnim("icon_target_pressed", "follow"),
-            disabled = { anim = "icon_target_disabled" },
+            idle = MakeRotorSkillAnim("icon_follow", "follow"),
+            focus = MakeRotorSkillAnim("icon_follow", "follow", true),
+            down = { anim = "icon_follow_pressed" },
+            disabled = { anim = "icon_follow_disable" },
         },
         onselect = function(inst)
             inst.components.spellbook:SetSpellAction(ACTIONS.KEI_ROTOR_CONTROL)
@@ -775,7 +807,7 @@ local function MakeRotorFollowSpell()
         execute = CastDroneFollow,
         kei_skill = "follow",
         kei_rotor_ring = 2,
-        widget_scale = 0.6,
+        widget_scale = 0.4,
     }
 end
 
@@ -810,11 +842,12 @@ local function fn()
     inst.entity:AddNetwork()
 
     MakeInventoryPhysics(inst)
-    MakeInventoryFloatable(inst, "med", 0.27, { 0.85, 1, 1 })
 
-    inst.AnimState:SetBank("wx78_drone_zap")
-    inst.AnimState:SetBuild("wx78_drone_zap")
-    inst.AnimState:PlayAnimation("drone_zap_bundle")
+    inst.AnimState:SetBank("kei_drone_zap_remote")
+    inst.AnimState:SetBuild("kei_drone_zap_remote")
+    inst.AnimState:PlayAnimation("ground")
+
+    MakeInventoryFloatable(inst, "med", 0.27, { 0.85, 1, 1 })
 
     inst:AddTag("kei_rotor_survey_controller")
     inst:AddTag("donotautopick")
@@ -842,7 +875,8 @@ local function fn()
     inst:AddComponent("inspectable")
 
     inst:AddComponent("inventoryitem")
-    inst.components.inventoryitem:ChangeImageName("wx78_drone_zap_remote")
+    inst.components.inventoryitem.atlasname = ROTOR_ICON_ATLAS
+    inst.components.inventoryitem:ChangeImageName("kei_drone_zap_remote_close")
     -- cangoincontainer 必须保持开启，否则 DST 的 SetActiveItem 会直接
     -- 丢弃控制器，导致鼠标拿起、右键装备流程中的物品消失。普通容器仍
     -- 由 kei/drone/hooks/containers.lua 拦截。
@@ -871,6 +905,7 @@ local function fn()
     inst.GetControllerOwnerUserId = GetOwnerUserId
     inst.FindBoundDrone = FindBoundDrone
     inst.ToggleBoundDrone = ToggleBoundDrone
+    inst.RecallBoundDrone = RecallBoundDrone
     inst.ToggleDronePilot = ToggleDronePilot
     inst.ToggleDroneFollow = ToggleDroneFollow
     inst.StopDroneFollow = StopDroneFollow
@@ -891,9 +926,13 @@ local function fn()
 end
 
 return Prefab("kei_rotor_survey_controller", fn, {
-    Asset("ANIM", "anim/wx78_drone_zap.zip"),
-    Asset("ANIM", "anim/swap_wx78_drone_zap_remote.zip"),
-    Asset("ANIM", "anim/spell_icons_winona.zip"),
-    Asset("INV_IMAGE", "wx78_drone_zap_remote"),
-    Asset("INV_IMAGE", "wx78_drone_zap_remote_held"),
+    Asset("ANIM", "anim/kei_drone_zap_remote.zip"),
+    -- 原版角色状态机使用的遥控动作：
+    -- drone_zap_remote_use_pre / loop / pst。
+    -- 这些动作依赖原版 wx78_drone_zap build，单独作为资源包加载，
+    -- 不与自定义地面和手持遥控器 build 合并，避免破坏 KAnim 索引。
+    Asset("ANIM", "anim/kei_drone_zap_remote_actions.zip"),
+    Asset("ANIM", "anim/drone_icons_kei.zip"),
+    Asset("ATLAS", ROTOR_ICON_ATLAS),
+    Asset("IMAGE", ROTOR_ICON_ATLAS:gsub("%.xml$", ".tex")),
 })

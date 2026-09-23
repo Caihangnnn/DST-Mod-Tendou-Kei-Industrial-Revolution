@@ -8,6 +8,36 @@ local SpDamageUtil = require("components/spdamageutil")
 local SlowSources = require("kei/slow_sources")
 local Enchantment = require("kei/integrations/enchantment")
 local KeiEffectManager = require("kei/effect_manager")
+local Power = require("kei/power_system")
+
+local function IsCharger(inst)
+    return inst ~= nil and inst.prefab == "kei_electrobank_charger_small"
+end
+
+local function IsEmptyElectrobank(item)
+    return item ~= nil and item.prefab == "kei_emptyelectrobank"
+end
+
+local function IsFullElectrobank(item)
+    return item ~= nil and item.prefab == "kei_electrobank"
+end
+
+local function GetChargerContentsState(charger)
+    if charger ~= nil and charger._kei_charger_contents ~= nil then
+        return charger._kei_charger_contents:value()
+    end
+
+    local container = charger ~= nil and charger.replica ~= nil
+        and charger.replica.container or nil
+    local item = container ~= nil and container:GetItemInSlot(1) or nil
+    return IsFullElectrobank(item) and 2 or (IsEmptyElectrobank(item) and 1 or 0)
+end
+
+local function ChargerCanReceiveEmptyBattery(charger, item)
+    return IsCharger(charger)
+        and IsEmptyElectrobank(item)
+        and GetChargerContentsState(charger) == 0
+end
 
 local function AddKeiActionHandler(action, state)
     AddStategraphActionHandler("wilson", ActionHandler(action, state))
@@ -167,6 +197,17 @@ rotor_pilot_action.mount_valid = true
 
 local rotor_beam_action = AddAction("KEI_ROTOR_BEAM", "光束", CastRotorControllerSpell)
 rotor_beam_action.mount_valid = true
+
+local rotor_recall_action = AddAction("KEI_RECALL_ROTOR_DRONE", "收回", function(act)
+    local drone = act ~= nil and act.target or nil
+    if drone == nil or drone.RecallForOwner == nil then
+        return false
+    end
+    return drone:RecallForOwner(act.doer)
+end)
+rotor_recall_action.mount_valid = true
+rotor_recall_action.rmb = true
+AddKeiActionHandler(ACTIONS.KEI_RECALL_ROTOR_DRONE, "doshortaction")
 
 local function IsClearTeleportPoint(pt)
     local x, y, z = pt:Get()
@@ -713,7 +754,11 @@ local function GetTargetWorldAnim(target, slot)
                 target.AnimState.GetCurrentAnimationName,
                 target.AnimState
             )
-            if success and type(current) == "string" and current ~= "" then
+            if success
+                and type(current) == "string"
+                and current ~= ""
+                and current ~= "FROMNUM"
+            then
                 return current
             end
         end
@@ -1812,7 +1857,21 @@ AddKeiActionHandler(ACTIONS.KEI_ANALYZE_EQUIP, "give")
 
 -- USEITEM：拿着某个物品点另一个目标时添加动作，例如 CD -> 记录仪、解析工具 -> 装备。
 AddComponentAction("USEITEM", "inventoryitem", function(inst, doer, target, actions, right)
-    if not right or not IsKei(doer) or target == nil then
+    if target == nil then
+        return
+    end
+
+    -- The charger keeps an internal one-slot container for server-side
+    -- storage, but its widget is intentionally closed.  Add this action to
+    -- the same callback as the other USEITEM actions: AddComponentAction
+    -- replaces callbacks by component name instead of composing them.
+    if ChargerCanReceiveEmptyBattery(target, inst)
+        and ACTIONS.KEI_CHARGER_INSERT ~= nil
+    then
+        table.insert(actions, ACTIONS.KEI_CHARGER_INSERT)
+    end
+
+    if not right or not IsKei(doer) then
         return
     end
     if inst:HasTag("kei_battery")
@@ -1836,11 +1895,30 @@ AddComponentAction("USEITEM", "inventoryitem", function(inst, doer, target, acti
         table.insert(actions, ACTIONS.KEI_COPY_DATA_CD)
     elseif inst:HasTag("kei_analysis_tool") and IsPotentialAnalyzableEquipment(target) then
         table.insert(actions, ACTIONS.KEI_ANALYZE_EQUIP)
+    elseif Power.IsWireItem(inst)
+        and Power.IsCompatibleEndpoint(target, inst.kei_power_grade, inst.kei_power_wire_kind)
+    then
+        table.insert(actions, ACTIONS.KEI_POWER_CONNECT)
     end
 end)
 
 -- SCENE：空手右键记录仪，根据状态显示停止记录或收获数据。
 AddComponentAction("SCENE", "inspectable", function(inst, doer, actions, right)
+    -- The charger keeps its storage container closed, so expose harvesting
+    -- through the normal scene/inspectable path as well.  Only an empty hand
+    -- may harvest; holding either kind of battery must not produce a charger
+    -- action that cannot be completed.
+    if IsCharger(inst)
+        and doer ~= nil
+        and doer.replica ~= nil
+        and doer.replica.inventory ~= nil
+        and doer.replica.inventory:GetActiveItem() == nil
+        and GetChargerContentsState(inst) == 2
+        and ACTIONS.KEI_CHARGER_HARVEST ~= nil
+    then
+        table.insert(actions, ACTIONS.KEI_CHARGER_HARVEST)
+    end
+
     if not right or not IsKei(doer) or IsNonInteractiveFx(inst) then
         return
     end
@@ -1861,6 +1939,18 @@ AddComponentAction("SCENE", "inspectable", function(inst, doer, actions, right)
     end
 
     if not inst:HasTag("kei_data_recorder") then
+        if inst:HasTag("kei_rotor_surveyor")
+            and inst.RecallForOwner ~= nil
+            and inst._kei_drone_owner_userid_net ~= nil
+            and inst._kei_drone_owner_userid_net:value() == doer.userid
+        then
+            local activeitem = doer.replica.inventory ~= nil
+                and doer.replica.inventory:GetActiveItem()
+                or nil
+            if activeitem == nil then
+                table.insert(actions, ACTIONS.KEI_RECALL_ROTOR_DRONE)
+            end
+        end
         return
     end
 

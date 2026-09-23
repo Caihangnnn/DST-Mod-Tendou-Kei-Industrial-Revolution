@@ -5,4 +5,5 @@ return {
     "scripts/prefabs/items/kei_mini_alice.lua",
     "scripts/prefabs/items/drone/surveyor.lua",
     "scripts/prefabs/items/drone/controller.lua",
+    "scripts/prefabs/items/kei_power.lua",
 }

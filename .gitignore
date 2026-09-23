@@ -1,5 +1,4 @@
 Discuss.md
-Design
-
-# Generated large audio banks
-sound/kei_carol_a*.fsb
+Design/*
+!Design/kei_drone_hover/
+!Design/kei_drone_hover/**

@@ -3,6 +3,7 @@
 modimport("scripts/kei/strings.lua")
 modimport("scripts/kei/presentation.lua")
 modimport("scripts/kei/actions.lua")
+modimport("scripts/kei/power.lua")
 modimport("scripts/kei/hooks/task_book.lua")
 modimport("scripts/kei/drone/hooks/builder.lua")
 modimport("scripts/kei/drone/hooks/inventory.lua")
@@ -16,4 +17,3 @@ modimport("scripts/kei/integrations/winona.lua")
 modimport("scripts/kei/recipes.lua")
 modimport("scripts/kei/integrations/wanderingtrader.lua")
 modimport("scripts/kei/growth/init.lua")
-

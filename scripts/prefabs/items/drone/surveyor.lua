@@ -3,10 +3,11 @@
 local easing = require("easing")
 local RotorSurveyRegistry = require("kei/drone/registry")
 local RotorUpgrades = require("kei/drone/upgrades")
+local DroneAnimation = require("kei/drone/animation")
 
 local assets =
 {
-    Asset("ANIM", "anim/wx78_drone_scout.zip"),
+    Asset("ANIM", "anim/kei_drone.zip"),
     Asset("ANIM", "anim/wx78_map_marker.zip"),
     Asset("ANIM", "anim/kei_halo_350.zip"),
 }
@@ -24,7 +25,15 @@ local FOLLOW_MOVE_PERIOD = FRAMES
 local FOLLOW_DISTANCE = 3
 local PILOT_INPUT_TIMEOUT = 0.75
 
-local function CreateDecal(skin_build)
+local function GetDroneSide(inst, previous)
+    return DroneAnimation.GetSide(inst, previous)
+end
+
+local function PlayDroneAnimation(inst, prefix, loop, side)
+    return DroneAnimation.Play(inst, prefix, loop, side)
+end
+
+local function CreateDecal(skin_build, side)
     local inst = CreateEntity()
 
     inst:AddTag("FX")
@@ -35,13 +44,10 @@ local function CreateDecal(skin_build)
     inst.entity:AddTransform()
     inst.entity:AddAnimState()
 
-    inst.AnimState:SetBank("wx78_drone_scout")
-    if skin_build ~= 0 then
-        inst.AnimState:SetSkin(skin_build, "wx78_drone_scout")
-    else
-        inst.AnimState:SetBuild("wx78_drone_scout")
-    end
-    inst.AnimState:PlayAnimation("scan_decal", true)
+    inst.AnimState:SetBank("kei_drone")
+    inst.AnimState:SetBuild("kei_drone")
+    inst._kei_drone_animation = true
+    PlayDroneAnimation(inst, "idle_ground", true, side)
     inst.AnimState:SetLightOverride(0.15)
     inst.AnimState:SetOrientation(ANIM_ORIENTATION.OnGround)
     inst.AnimState:SetLayer(LAYER_BACKGROUND)
@@ -54,13 +60,25 @@ end
 local function BeamPostUpdate(inst)
     local x, _, z = inst.Transform:GetWorldPosition()
     inst.decal.Transform:SetPosition(x, 0, z)
+
+    local parent = inst.entity:GetParent()
+    if parent ~= nil and parent:IsValid() then
+        local side = GetDroneSide(parent, inst._kei_drone_side)
+        if side ~= inst._kei_drone_side then
+            inst._kei_drone_side = side
+            PlayDroneAnimation(inst, "guang_loop", true, side)
+            if inst.decal._kei_drone_animation then
+                PlayDroneAnimation(inst.decal, "idle_ground", true, side)
+            end
+        end
+    end
 end
 
 local function BeamOnRemoveEntity(inst)
     inst.decal:Remove()
 end
 
-local function CreateBeam(skin_build)
+local function CreateBeam(skin_build, side)
     local inst = CreateEntity()
 
     inst:AddTag("DECOR")
@@ -70,17 +88,15 @@ local function CreateBeam(skin_build)
     inst.entity:AddTransform()
     inst.entity:AddAnimState()
 
-    inst.AnimState:SetBank("wx78_drone_scout")
-    if skin_build ~= 0 then
-        inst.AnimState:SetSkin(skin_build, "wx78_drone_scout")
-    else
-        inst.AnimState:SetBuild("wx78_drone_scout")
-    end
-    inst.AnimState:PlayAnimation("scan_projection", true)
+    inst.AnimState:SetBank("kei_drone")
+    inst.AnimState:SetBuild("kei_drone")
+    inst._kei_drone_animation = true
+    PlayDroneAnimation(inst, "guang_loop", true, side)
     inst.AnimState:SetFinalOffset(-1)
     inst.AnimState:SetLightOverride(0.15)
 
-    inst.decal = CreateDecal(skin_build)
+    inst.decal = CreateDecal(skin_build, side)
+    inst._kei_drone_side = side
 
     inst:AddComponent("updatelooper")
     inst.components.updatelooper:AddPostUpdateFn(BeamPostUpdate)
@@ -92,7 +108,7 @@ end
 local function OnScanningDirty(inst)
     if inst.scanning:value() then
         if inst.beam == nil then
-            inst.beam = CreateBeam(inst.build:value())
+            inst.beam = CreateBeam(inst.build:value(), GetDroneSide(inst))
             inst.beam.entity:SetParent(inst.entity)
         end
     elseif inst.beam ~= nil then
@@ -101,7 +117,7 @@ local function OnScanningDirty(inst)
     end
 end
 
-local function CreateHaloPart(animation, onground)
+local function CreateHaloPart(animation, onground, side)
     local inst = CreateEntity()
 
     inst:AddTag("FX")
@@ -110,16 +126,17 @@ local function CreateHaloPart(animation, onground)
 
     inst.entity:AddTransform()
     inst.entity:AddAnimState()
+    inst._kei_drone_animation = not onground
     local animation_name = animation
     if onground then
         inst.AnimState:SetBank("kei_halo_350")
         inst.AnimState:SetBuild("kei_halo_350")
     else
-        -- The old custom halo build was removed. Airborne beams use the
-        -- vanilla scout projection, while kei_halo_350 remains ground-only.
-        inst.AnimState:SetBank("wx78_drone_scout")
-        inst.AnimState:SetBuild("wx78_drone_scout")
-        animation_name = "scan_projection"
+        -- The new drone build supplies the shared airborne beam animation.
+        -- Skill-specific ground halos remain on kei_halo_350 for now.
+        inst.AnimState:SetBank("kei_drone")
+        inst.AnimState:SetBuild("kei_drone")
+        animation_name = "guang_loop_" .. (side or "upside")
     end
     inst.AnimState:PlayAnimation(animation_name, true)
     inst.AnimState:SetLightOverride(0.15)
@@ -140,6 +157,15 @@ end
 local function HaloPostUpdate(inst)
     local x, _, z = inst.Transform:GetWorldPosition()
     inst.decal.Transform:SetPosition(x, 0, z)
+
+    local parent = inst.entity:GetParent()
+    if parent ~= nil and parent:IsValid() and inst.beam ~= nil then
+        local side = GetDroneSide(parent, inst._kei_drone_side)
+        if side ~= inst._kei_drone_side then
+            inst._kei_drone_side = side
+            PlayDroneAnimation(inst.beam, "guang_loop", true, side)
+        end
+    end
 end
 
 local function HaloOnRemoveEntity(inst)
@@ -156,9 +182,10 @@ local function CreateHaloBeam(animation)
     inst.persists = false
 
     inst.entity:AddTransform()
-    inst.beam = CreateHaloPart(animation, false)
+    inst.beam = CreateHaloPart(animation, false, "upside")
     inst.beam.entity:SetParent(inst.entity)
     inst.decal = CreateHaloPart(animation, true)
+    inst._kei_drone_side = "upside"
 
     inst:AddComponent("updatelooper")
     inst.components.updatelooper:AddPostUpdateFn(HaloPostUpdate)
@@ -200,18 +227,18 @@ local function StartStrengthenGroundFlicker(inst)
     end
 end
 
-local function CreateSkillBeam(beam_name)
+local function CreateSkillBeam(inst, beam_name)
     if beam_name == "survey" then
-        return CreateBeam(0)
+        return CreateBeam(0, GetDroneSide(inst))
     end
 
     if beam_name == "collect" then
-        local inst = CreateBeam(0)
-        if inst.decal ~= nil and inst.decal:IsValid() then
-            inst.decal:Remove()
+        local beam = CreateBeam(0, GetDroneSide(inst))
+        if beam.decal ~= nil and beam.decal:IsValid() then
+            beam.decal:Remove()
         end
-        inst.decal = CreateHaloPart("kei_halo_collect", true)
-        return inst
+        beam.decal = CreateHaloPart("kei_halo_collect", true)
+        return beam
     end
 
     if beam_name == "resurrection"
@@ -226,9 +253,9 @@ local function CreateSkillBeam(beam_name)
         or beam_name == "friendly"
     then
         -- 光束沿用旋翼测绘机的投影动画，地面纹理使用新的光环动画。
-        local inst = CreateBeam(0)
-        if inst.decal ~= nil and inst.decal:IsValid() then
-            inst.decal:Remove()
+        local beam = CreateBeam(0, GetDroneSide(inst))
+        if beam.decal ~= nil and beam.decal:IsValid() then
+            beam.decal:Remove()
         end
         local ground_animation
         if beam_name == "teleport" then
@@ -238,11 +265,11 @@ local function CreateSkillBeam(beam_name)
         else
             ground_animation = "kei_halo_" .. beam_name
         end
-        inst.decal = CreateHaloPart(ground_animation, true)
+        beam.decal = CreateHaloPart(ground_animation, true)
         if beam_name == "strengthen" then
-            StartStrengthenGroundFlicker(inst)
+            StartStrengthenGroundFlicker(beam)
         end
-        return inst
+        return beam
     end
 end
 
@@ -254,7 +281,7 @@ local function OnSkillBeamDirty(inst)
         return
     end
 
-    inst.skill_beam = CreateSkillBeam(beam_name)
+    inst.skill_beam = CreateSkillBeam(inst, beam_name)
     if inst.skill_beam ~= nil then
         inst.skill_beam.entity:SetParent(inst.entity)
     end
@@ -292,7 +319,10 @@ local function OnStartDelivery(inst, dest, doer)
     local _
     inst._x, _, inst._z = inst.Transform:GetWorldPosition()
     if dest.x ~= inst._x or dest.z ~= inst._z then
-        inst.Transform:SetRotation(math.atan2(inst._z - dest.z, dest.x - inst._x) / DEGREES)
+        DroneAnimation.SetFacingRotation(
+            inst,
+            math.atan2(inst._z - dest.z, dest.x - inst._x) / DEGREES
+        )
         SetScanning(inst, true)
     end
     return true
@@ -329,7 +359,13 @@ local function OnDeliveryProgress(inst, t, length, origin, dest)
     local _, vy, _ = inst.Physics:GetMotorVel()
     if k1 > k then
         local speed = (k1 - k) * math.sqrt(dx * dx + dz * dz) * 30
-        inst.Physics:SetMotorVel(speed, vy, 0)
+        local direction = math.atan2(-dz, dx) / DEGREES
+        local relative_angle = (direction - inst.Transform:GetRotation()) * DEGREES
+        inst.Physics:SetMotorVel(
+            speed * math.cos(relative_angle),
+            vy,
+            -speed * math.sin(relative_angle)
+        )
     else
         inst.Physics:SetMotorVel(0, vy, 0)
     end
@@ -357,7 +393,9 @@ local function OnDeliveryProgress(inst, t, length, origin, dest)
         end
     elseif is_scanning then
         SetScanning(inst, false)
-        inst:Hide()
+        -- The drone is now a persistent takeoff/landing entity. Do not hide
+        -- it when a map-delivery route leaves the permitted scan area; the
+        -- stategraph owns visibility for the drone itself.
         inst.SoundEmitter:KillSound("idle")
     end
 end
@@ -402,11 +440,11 @@ end
 local function OnBuildDirty(inst)
     if inst.beam ~= nil then
         if inst.build:value() == 0 then
-            inst.beam.AnimState:SetBuild("wx78_drone_scout")
-            inst.beam.decal.AnimState:SetBuild("wx78_drone_scout")
+            inst.beam.AnimState:SetBuild("kei_drone")
+            inst.beam.decal.AnimState:SetBuild("kei_drone")
         else
-            inst.beam.AnimState:SetSkin(inst.build:value(), "wx78_drone_scout")
-            inst.beam.decal.AnimState:SetSkin(inst.build:value(), "wx78_drone_scout")
+            inst.beam.AnimState:SetBuild("kei_drone")
+            inst.beam.decal.AnimState:SetBuild("kei_drone")
         end
     end
 end
@@ -437,6 +475,17 @@ local function OnDroneRemoved(inst)
         pilot.sg:GoToState("kei_rotor_drone_pilot_stop", true)
     end
     RotorSurveyRegistry.Unregister(inst)
+end
+
+local function RecallForOwner(inst, owner)
+    local controller = inst._kei_drone_controller
+    if controller == nil
+        or not controller:IsValid()
+        or controller.RecallBoundDrone == nil
+    then
+        return false
+    end
+    return controller:RecallBoundDrone(owner)
 end
 
 local function StopFollowMovement(inst)
@@ -482,7 +531,7 @@ local function UpdateFollowMotion(inst)
 
     -- Flying drones intentionally move in world space: unlike ground pets,
     -- they do not need locomotor pathfinding or obstacle avoidance.
-    inst.Transform:SetRotation(math.atan2(-dz, dx) / DEGREES)
+    DroneAnimation.SetFacingRotation(inst, math.atan2(-dz, dx) / DEGREES)
     inst.Transform:SetPosition(next_x, y, next_z)
     if inst.Physics ~= nil then
         local _, vy, _ = inst.Physics:GetMotorVel()
@@ -615,11 +664,14 @@ local function OnPilotLocomote(inst, data)
         end
     end
 
-    inst.Transform:SetRotation(dir)
+    local facing_rotation = DroneAnimation.SetFacingRotation(inst, dir)
     local _, vy, _ = inst.Physics:GetMotorVel()
-    -- SetMotorVel 的水平速度沿实体自身朝向，先旋转实体再向前移动，
-    -- 与原版旋翼测绘机和 locomotor:RunInDirection 的实现一致。
-    inst.Physics:SetMotorVel(speed, vy, 0)
+    local relative_angle = (dir - facing_rotation) * DEGREES
+    inst.Physics:SetMotorVel(
+        speed * math.cos(relative_angle),
+        vy,
+        -speed * math.sin(relative_angle)
+    )
 end
 
 local function StopRotorMovement(inst)
@@ -661,15 +713,17 @@ local function fn()
     inst.entity:AddAnimState()
     inst.entity:AddSoundEmitter()
     inst.entity:AddNetwork()
+    inst.Transform:SetEightFaced()
+    DroneAnimation.SetFacingRotation(inst, 0)
     -- 驾驶时无人机必须在远离角色后继续运行并保持可同步，不能进入实体休眠。
     inst.entity:SetCanSleep(false)
 
     MakeFlyingCharacterPhysics(inst, 50, 0.4)
     inst.Physics:SetCollisionMask(COLLISION.GROUND)
 
-    inst.AnimState:SetBank("wx78_drone_scout")
-    inst.AnimState:SetBuild("wx78_drone_scout")
-    inst.AnimState:PlayAnimation("idle")
+    inst.AnimState:SetBank("kei_drone")
+    inst.AnimState:SetBuild("kei_drone")
+    PlayDroneAnimation(inst, "idle_ground", true, GetDroneSide(inst))
 
     inst:AddTag("flying")
     inst:AddTag("mapscout")
@@ -721,6 +775,7 @@ local function fn()
     inst.OnDroneScoutSkinChanged = OnSurveyorSkinChanged
     inst.SetSkillBeam = SetSkillBeam
     inst.GetSkillBeam = GetSkillBeam
+    inst.RecallForOwner = RecallForOwner
     inst.StartFollowing = StartFollowing
     inst.StopFollowing = StopFollowing
     inst.StopRotorMovement = StopRotorMovement

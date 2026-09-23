@@ -531,7 +531,11 @@ local function GetCurrentOrFallbackAnim(source, fallback)
                 source.AnimState.GetCurrentAnimationName,
                 source.AnimState
             )
-            if success and type(current) == "string" and current ~= "" then
+            if success
+                and type(current) == "string"
+                and current ~= ""
+                and current ~= "FROMNUM"
+            then
                 return current
             end
         end
@@ -1123,4 +1127,3 @@ for _, prefab in ipairs(MakeBasicAttributeProtocolCDs()) do
 end
 
 return unpack(prefabs)
-

@@ -104,7 +104,13 @@ local function AttachVirtualEquipment(owner, item)
         return false
     end
 
-    equippable:Equip(owner, false)
+    -- Keep source callbacks inside the scoped compatibility view. This lets
+    -- vanilla callbacks register owner listeners which can later resolve the
+    -- virtual item through Inventory:GetEquippedItem without changing the
+    -- real inventory.equipslots table.
+    VirtualEquipment.WithTemporaryEquipmentView(owner, item, function()
+        equippable:Equip(owner, false)
+    end)
     return true
 end
 
@@ -115,7 +121,9 @@ local function DetachVirtualEquipment(owner, item)
 
     local equippable = item.components ~= nil and item.components.equippable or nil
     if equippable ~= nil and equippable.IsEquipped ~= nil and equippable:IsEquipped() then
-        equippable:Unequip(owner)
+        VirtualEquipment.WithTemporaryEquipmentView(owner, item, function()
+            equippable:Unequip(owner)
+        end)
     end
 
     local inventoryitem = item.components ~= nil and item.components.inventoryitem or nil

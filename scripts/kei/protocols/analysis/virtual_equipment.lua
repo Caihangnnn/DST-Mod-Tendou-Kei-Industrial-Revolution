@@ -1,5 +1,232 @@
 local VirtualEquipment = {}
 
+local VIRTUAL_VIEW_STATE = "_kei_virtual_equipment_view_state"
+local VIRTUAL_EVENT_WRAPPERS = "_kei_virtual_event_wrappers"
+local VIRTUAL_CONTEXT_STACK = {}
+
+local function IsVirtualEquipment(item)
+    return item ~= nil
+        and item.HasTag ~= nil
+        and item:HasTag("kei_virtual_equipment")
+end
+
+local function GetVirtualEquipmentOwner(item)
+    local inventoryitem = item ~= nil and item.components ~= nil and item.components.inventoryitem or nil
+    return inventoryitem ~= nil and inventoryitem.owner or nil
+end
+
+local function IsUsableVirtualEquipment(item, force)
+    if item == nil or item.IsValid == nil or not item:IsValid() then
+        return false
+    end
+
+    local equippable = item.components ~= nil and item.components.equippable or nil
+    return equippable ~= nil and (force or equippable:IsEquipped())
+end
+
+local function BuildVirtualEquipmentView(owner, focus)
+    local view = {}
+
+    local function Add(item, force)
+        if not IsUsableVirtualEquipment(item, force) then
+            return
+        end
+
+        local equipslot = item.components.equippable.equipslot
+        if equipslot ~= nil then
+            view[equipslot] = item
+        end
+    end
+
+    Add(focus, true)
+
+    local slots = owner ~= nil and owner.components ~= nil
+        and owner.components.kei_protocolslots or nil
+    if slots ~= nil then
+        Add(slots.virtual_hand_equip, false)
+        for _, item in pairs(slots.virtual_equips or {}) do
+            Add(item, false)
+        end
+    end
+
+    return view
+end
+
+local function PushVirtualEquipmentView(owner, focus)
+    local inventory = owner ~= nil and owner.components ~= nil and owner.components.inventory or nil
+    if inventory == nil then
+        return nil
+    end
+
+    local state = rawget(inventory, VIRTUAL_VIEW_STATE)
+    if state == nil then
+        state = {
+            stack = {},
+            original_method = rawget(inventory, "GetEquippedItem"),
+            base_method = inventory.GetEquippedItem,
+        }
+        rawset(inventory, VIRTUAL_VIEW_STATE, state)
+
+        local base_method = state.base_method
+        inventory.GetEquippedItem = function(inv, equipslot, ...)
+            local current = rawget(inv, VIRTUAL_VIEW_STATE)
+            if current ~= nil then
+                for index = #current.stack, 1, -1 do
+                    local item = current.stack[index][equipslot]
+                    if IsUsableVirtualEquipment(item, false)
+                        or IsUsableVirtualEquipment(item, true)
+                    then
+                        return item
+                    end
+                end
+            end
+            return base_method(inv, equipslot, ...)
+        end
+    end
+
+    table.insert(state.stack, BuildVirtualEquipmentView(owner, focus))
+    return inventory
+end
+
+local function PopVirtualEquipmentView(inventory)
+    if inventory == nil then
+        return
+    end
+
+    local state = rawget(inventory, VIRTUAL_VIEW_STATE)
+    if state == nil then
+        return
+    end
+
+    table.remove(state.stack)
+    if #state.stack == 0 then
+        if state.original_method == nil then
+            inventory.GetEquippedItem = nil
+        else
+            inventory.GetEquippedItem = state.original_method
+        end
+        rawset(inventory, VIRTUAL_VIEW_STATE, nil)
+    end
+end
+
+function VirtualEquipment.WithTemporaryEquipmentView(owner, focus, callback, ...)
+    if type(callback) ~= "function" then
+        return
+    end
+
+    local args = { ... }
+    local inventory = PushVirtualEquipmentView(owner, focus)
+    table.insert(VIRTUAL_CONTEXT_STACK, { owner = owner, item = focus })
+    local results = { pcall(callback, unpack(args)) }
+
+    table.remove(VIRTUAL_CONTEXT_STACK)
+    PopVirtualEquipmentView(inventory)
+
+    if not results[1] then
+        error(results[2])
+    end
+    return unpack(results, 2)
+end
+
+local function GetActiveVirtualContext()
+    return VIRTUAL_CONTEXT_STACK[#VIRTUAL_CONTEXT_STACK]
+end
+
+local function AddVirtualEventWrapper(listener, event, callback, source, owner, item, wrapper)
+    local wrappers = rawget(listener, VIRTUAL_EVENT_WRAPPERS)
+    if wrappers == nil then
+        wrappers = {}
+        rawset(listener, VIRTUAL_EVENT_WRAPPERS, wrappers)
+    end
+    wrappers[#wrappers + 1] = {
+        event = event,
+        callback = callback,
+        source = source,
+        wrapper = wrapper,
+    }
+end
+
+local function InstallVirtualEventHooks()
+    if EntityScript == nil or EntityScript._kei_virtual_equipment_event_hooks_installed then
+        return
+    end
+    EntityScript._kei_virtual_equipment_event_hooks_installed = true
+
+    local old_listen = EntityScript.ListenForEvent
+    EntityScript.ListenForEvent = function(self, event, callback, source)
+        local actual_source = source or self
+        local owner = nil
+        local item = nil
+
+        if IsVirtualEquipment(self) then
+            owner = GetVirtualEquipmentOwner(self)
+            if owner ~= nil and actual_source == owner then
+                item = self
+            end
+        else
+            local context = GetActiveVirtualContext()
+            if context ~= nil and self == context.owner and actual_source == context.owner then
+                owner = context.owner
+                item = context.item
+            end
+        end
+
+        if item ~= nil and type(callback) == "function" then
+            local original = callback
+            local wrapper = function(event_source, data)
+                return VirtualEquipment.WithTemporaryEquipmentView(
+                    owner,
+                    item,
+                    original,
+                    event_source,
+                    data
+                )
+            end
+            AddVirtualEventWrapper(self, event, original, actual_source, owner, item, wrapper)
+            return old_listen(self, event, wrapper, source)
+        end
+
+        return old_listen(self, event, callback, source)
+    end
+
+    local old_remove = EntityScript.RemoveEventCallback
+    EntityScript.RemoveEventCallback = function(self, event, callback, source)
+        local actual_source = source or self
+        local wrappers = rawget(self, VIRTUAL_EVENT_WRAPPERS)
+        local removed = false
+
+        if wrappers ~= nil then
+            for index = #wrappers, 1, -1 do
+                local record = wrappers[index]
+                if record.event == event
+                    and record.callback == callback
+                    and record.source == actual_source
+                then
+                    old_remove(self, event, record.wrapper, source)
+                    table.remove(wrappers, index)
+                    removed = true
+                end
+            end
+            if #wrappers == 0 then
+                rawset(self, VIRTUAL_EVENT_WRAPPERS, nil)
+            end
+        end
+
+        if not removed then
+            return old_remove(self, event, callback, source)
+        end
+    end
+
+    local old_remove_all = EntityScript.RemoveAllEventCallbacks
+    EntityScript.RemoveAllEventCallbacks = function(self, ...)
+        local result = { old_remove_all(self, ...) }
+        rawset(self, VIRTUAL_EVENT_WRAPPERS, nil)
+        return unpack(result)
+    end
+end
+
+InstallVirtualEventHooks()
+
 local function GetAddSetter()
     local addsetterfn = addsetter
     if addsetterfn == nil and GLOBAL ~= nil then

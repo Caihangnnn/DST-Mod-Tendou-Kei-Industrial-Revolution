@@ -37,6 +37,15 @@ local ANIM_ASSETS = {
     "anim/kei_status_stability_meter.zip",
     "anim/kei_status_integrity_meter.zip",
     "anim/status_meter_wx_shield.zip",
+    "anim/kei_dev_generator.zip",
+    "anim/kei_batterysm.zip",
+    "anim/kei_electrobank.zip",
+    "anim/kei_electrobank_charger_small.zip",
+    "anim/kei_utilities_electric.zip",
+    "anim/kei_utilities_electric_conduct.zip",
+    "anim/kei_utilities_electric_conduct_hiwatt.zip",
+    "anim/kei_logic_wires.zip",
+    "anim/drone_icons_kei.zip",
 }
 
 local ATLAS_ASSETS = {
@@ -63,6 +72,7 @@ local ATLAS_ASSETS = {
     "images/inventoryimages/transparent_slot",
     "images/inventoryimages/kei_alice_slot",
     "images/inventoryimages/analysis_cd_slot",
+    "images/inventoryimages/kei_items_ir",
 }
 
 for _, path in ipairs(ANIM_ASSETS) do

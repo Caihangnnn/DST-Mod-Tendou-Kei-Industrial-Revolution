@@ -1,14 +1,11 @@
 local KEI_ROTOR_FILTER = "KEI_ROTOR"
 local KEI_PROTOCOL_FILTER = "KEI_PROTOCOL"
+local KEI_POWER_FILTER = "KEI_POWER"
 local CombatProtocolDefs = require("kei/protocols/combat")
 local GrowthRecipes = require("kei/growth_recipes")
 local RotorUpgrades = require("kei/drone/upgrades")
-local ROTOR_ICON = "wx78_drone_zap_remote.tex"
-local ROTOR_ATLAS = GetInventoryItemAtlas(ROTOR_ICON)
-if ROTOR_ATLAS == nil then
-    ROTOR_ICON = "goldnugget.tex"
-    ROTOR_ATLAS = GetInventoryItemAtlas(ROTOR_ICON) or "images/inventoryimages1.xml"
-end
+local ROTOR_ICON = "kei_drone_zap_remote_close.tex"
+local ROTOR_ATLAS = "images/inventoryimages/kei_items.xml"
 
 AddRecipeFilter({
     name = KEI_ROTOR_FILTER,
@@ -37,6 +34,17 @@ AddRecipeFilter({
     image_size = 64,
 })
 STRINGS.UI.CRAFTING_FILTERS[KEI_PROTOCOL_FILTER] = "协议"
+
+local POWER_ICON = "kei_dev_generator.tex"
+local POWER_ATLAS = "images/inventoryimages/kei_items_ir.xml"
+
+AddRecipeFilter({
+    name = KEI_POWER_FILTER,
+    atlas = POWER_ATLAS,
+    image = POWER_ICON,
+    image_size = 64,
+})
+STRINGS.UI.CRAFTING_FILTERS[KEI_POWER_FILTER] = "电力"
 
 local function image(tex)
     -- AddRecipe2 需要 atlas + image 成对传入。
@@ -103,6 +111,31 @@ end
 local filters = { "CHARACTER" }
 local rotor_filters = { KEI_ROTOR_FILTER }
 local protocol_filters = { KEI_PROTOCOL_FILTER }
+local power_filters = { KEI_POWER_FILTER }
+
+local function AddPowerRecipe(name, ingredients, image_name)
+    AddRecipe2(
+        name,
+        ingredients,
+        TECH.NONE,
+        kei_config({
+            atlas = "images/inventoryimages/kei_items_ir.xml",
+            image = image_name .. ".tex",
+            product = name,
+            nounlock = true,
+        }),
+        power_filters
+    )
+end
+
+AddPowerRecipe("kei_dev_generator_item", { Ingredient("gears", 2), Ingredient("transistor", 2) }, "kei_dev_generator")
+AddPowerRecipe("kei_batterysm_item", { Ingredient("goldnugget", 2), Ingredient("transistor", 1) }, "kei_batterysm")
+AddPowerRecipe("kei_electrobank", { Ingredient("goldnugget", 2), Ingredient("transistor", 1) }, "kei_electrobank")
+AddPowerRecipe("kei_electrobank_charger_small_item", { Ingredient("goldnugget", 2), Ingredient("transistor", 2) }, "kei_electrobank_charger_small")
+AddPowerRecipe("kei_utilities_electric_item", { Ingredient("twigs", 2), Ingredient("transistor", 1) }, "kei_utilities_electric")
+AddPowerRecipe("kei_utilities_electric_conduct_item", { Ingredient("goldnugget", 1), Ingredient("transistor", 1) }, "kei_utilities_electric_conduct")
+AddPowerRecipe("kei_utilities_electric_conduct_hiwatt_item", { Ingredient("goldnugget", 2), Ingredient("transistor", 2) }, "kei_utilities_electric_conduct_hiwatt")
+AddPowerRecipe("kei_logic_wires_item", { Ingredient("twigs", 2), Ingredient("transistor", 1) }, "kei_logic_wires")
 
 -- 空白 CD 和可直接制作的协议 CD 统一放在协议栏。
 AddRecipe2(
@@ -231,19 +264,6 @@ AddRecipe2(
     kei_config({
         atlas = "images/inventoryimages/kei_items.xml",
         image = "kei_data_recorder_item.tex",
-    }),
-    filters
-)
-
--- 便携电池：直接补充电量。
-AddRecipe2(
-    "kei_battery",
-    { Ingredient("transistor", 1), Ingredient("glommerfuel", 1) },
-    TECH.NONE,
-    kei_config({
-        atlas = "images/inventoryimages/kei_items.xml",
-        image = "kei_battery.tex",
-        numtogive = 3,
     }),
     filters
 )

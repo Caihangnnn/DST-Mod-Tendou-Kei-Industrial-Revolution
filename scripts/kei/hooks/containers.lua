@@ -4,6 +4,26 @@ local MiniAlice = require("kei/mini_alice")
 local mini_alice_max_slots = MiniAlice.GetMaxPages() * MiniAlice.SLOTS_PER_PAGE
 containers.MAXITEMSLOTS = math.max(containers.MAXITEMSLOTS or 0, mini_alice_max_slots)
 
+-- 移动电源充电机只有一个电池槽，并且只接受空的移动电池。
+-- 复用原版单格容器的布局，避免为测试机器额外制作 UI 动画资源。
+containers.params.kei_electrobank_charger_small = deepcopy(
+    containers.params.construction_container_1x1
+)
+containers.params.kei_electrobank_charger_small.widget.pos = Vector3(0, 0, 0)
+containers.params.kei_electrobank_charger_small.widget.side_align_tip = 40
+containers.params.kei_electrobank_charger_small.widget.buttoninfo = nil
+containers.params.kei_electrobank_charger_small.type = "chest"
+containers.params.kei_electrobank_charger_small.openlimit = 1
+containers.params.kei_electrobank_charger_small.acceptsstacks = false
+function containers.params.kei_electrobank_charger_small.itemtestfn(container, item, slot)
+    -- During completion the prefab temporarily allows its newly-created full
+    -- battery through this predicate so it can be placed back in the slot.
+    return item ~= nil
+        and (item.prefab == "kei_emptyelectrobank"
+            or (container.inst.kei_electrobank_inserting_output
+                and item.prefab == "kei_electrobank"))
+end
+
 containers.params.kei_protocol_container = deepcopy(containers.params.wx78_inventorycontainer)
 containers.params.kei_protocol_container.itemtestfn = function(container, item, slot)
     return item ~= nil and item:HasTag("kei_protocol_cd")
