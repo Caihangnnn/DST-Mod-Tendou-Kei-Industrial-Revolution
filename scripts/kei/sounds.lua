@@ -9,10 +9,17 @@ local CAROL_EVENT_NAMES = {
     "ghost_3", "ghost_4", "ghost_5", "pose", "talk_1", "talk_2",
     "talk_3", "talk_4", "talk_5", "yawn",
 }
+local CAROL_TRACK_TITLES = {
+    "希望の朝へ (向着黎明奔去)",
+    "かがやきサマーデイズ",
+    "キラメクMiLieへ",
+    "Memories of Kindness / 優しさの記憶",
+    "Target for love (EN Full ver)",
+}
 local CAROL_BANKS = {
-    { root = "kei_carol_a01/kei_carol_a01/", count = 20 },
-    { root = "kei_carol_a02/kei_carol_a02/", count = 20 },
-    { root = "kei_carol_a03/kei_carol_a03/", count = 13 },
+    -- The base Kei mod deliberately keeps only the first five Carol songs.
+    -- The optional music pack appends its tracks through MusicAPI below.
+    { root = "kei_carol_a01/kei_carol_a01/", count = 5 },
 }
 local CAROL_SOUNDS = {}
 for _, bank in ipairs(CAROL_BANKS) do
@@ -20,62 +27,6 @@ for _, bank in ipairs(CAROL_BANKS) do
         table.insert(CAROL_SOUNDS, bank.root .. CAROL_EVENT_NAMES[slot])
     end
 end
-
-local CAROL_TRACK_TITLES = {
-    "希望の朝へ (向着黎明奔去)",
-    "かがやきサマーデイズ",
-    "キラメクMiLieへ",
-    "Memories of Kindness / 優しさの記憶",
-    "Target for love (EN Full ver)",
-    "Get Over the World",
-    "澄んだ青空、萌ゆる心",
-    "可爱补习法-日文版",
-    "全力絶対Come☆True",
-    "一日一惡★レッツゴー！",
-    "Blue Canvas",
-    "青空Magic Day - 日文版",
-    "あゆみ",
-    "手つなぎハッピーエンド",
-    "これが私のハードボイルド！？",
-    "青春のアーカイブ",
-    "彩りキャンバス",
-    "パフェダイアリーズ",
-    "好きなんです!",
-    "ぷかぷかぴ～す",
-    "ワンダー・ファニー・ハーモニー",
-    "月導",
-    "Do you wanna kiss angel (日文版)",
-    "ありがとう、そしてこれからも。",
-    "勇者アリスの大冒険！",
-    "コントロールできない感情という変数",
-    "進み続ける兎たち",
-    "トモダチOneStep",
-    "一緒の約束",
-    "純真レゾンデートル",
-    "夜明けのコーヒーの香り",
-    "夕映えの約束 / The Promise at Sunset",
-    "うららか☆SYUGYOU",
-    "Victory Sky",
-    "Walking Night",
-    "Twinkle☆Magic",
-    "イマハカラメル ―Sweeten Up Later",
-    "憧れの日々",
-    "Echoes of Longing / 憧れの残響",
-    "笑顔 はなまる Happy Day",
-    "Hand in Hand, Heart in Heart",
-    "記憶と記録の間に",
-    "看板娘のヒミツ素顔",
-    "発明！ロマン！Engineer Dream！！",
-    "アスナのまにまに？",
-    "Let's Go With...",
-    "Someday Certainly",
-    "黒翼が奏でる正義",
-    "紡ぐ時間",
-    "Warmth",
-    "温もりのそばで、羽を預けて",
-    "幸せになるよ",
-    "笑顔お祭りわっしょい！",
-}
 
 local function Sound(name, sound_root)
     return (sound_root or SOUND_ROOT) .. name
@@ -93,7 +44,7 @@ local function ChooseCarolSound(inst)
     if IsValidCarolTrack(selected) then
         return CAROL_SOUNDS[selected]
     end
-    return CAROL_SOUNDS[math.random(#CAROL_SOUNDS)]
+    return CAROL_SOUNDS[math.random(5)]
 end
 
 local CAROL_VOLUME = 0.5
@@ -112,6 +63,46 @@ MusicAPI.volume = MusicAPI.volume or CAROL_VOLUME
 MusicAPI.mode = MusicAPI.mode or "local"
 MusicAPI.playing = MusicAPI.playing or false
 MusicAPI.rule = MusicAPI.rule or CAROL_RULE_SEQUENCE
+MusicAPI._registered_track_packs = MusicAPI._registered_track_packs or {}
+
+-- Optional music mods can register additional tracks whether they load before
+-- or after this mod. The same ordered registration is performed on clients
+-- and the master, keeping UI and public-play RPC indexes in sync.
+function MusicAPI:RegisterTrackPack(pack_id, tracks)
+    if type(pack_id) ~= "string" or pack_id == ""
+        or type(tracks) ~= "table"
+        or self._registered_track_packs[pack_id]
+    then
+        return false
+    end
+
+    local added = 0
+    for _, track in ipairs(tracks) do
+        if type(track) == "table"
+            and type(track.title) == "string"
+            and type(track.address) == "string"
+            and track.address ~= ""
+        then
+            table.insert(CAROL_TRACK_TITLES, track.title)
+            table.insert(CAROL_SOUNDS, track.address)
+            added = added + 1
+        end
+    end
+
+    if added > 0 then
+        self._registered_track_packs[pack_id] = true
+        return true
+    end
+    return false
+end
+
+local pending_track_packs = rawget(GLOBAL, "TENDOU_KEI_MUSIC_PENDING_PACKS") or {}
+for _, pack in ipairs(pending_track_packs) do
+    if type(pack) == "table" then
+        MusicAPI:RegisterTrackPack(pack.id, pack.tracks)
+    end
+end
+GLOBAL.TENDOU_KEI_MUSIC_PENDING_PACKS = nil
 
 local function UpdateClientCarolState()
     if ThePlayer ~= nil then

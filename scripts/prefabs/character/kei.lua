@@ -19,8 +19,6 @@ local assets = {
     Asset("SOUND", "sound/tendou_kei_vc.fsb"),
     Asset("SOUND", "sound/kei_hit_sound.fsb"),
     Asset("SOUND", "sound/kei_carol_a01.fsb"),
-    Asset("SOUND", "sound/kei_carol_a02.fsb"),
-    Asset("SOUND", "sound/kei_carol_a03.fsb"),
     Asset("ANIM", "anim/kei.zip"),
     Asset("ANIM", "anim/ghost_kei_build.zip"),
     Asset("ANIM", "anim/player_idles_kei.zip"),

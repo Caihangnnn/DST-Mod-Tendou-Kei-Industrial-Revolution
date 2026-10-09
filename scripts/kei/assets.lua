@@ -9,10 +9,6 @@ Assets = {
     Asset("SOUND", "sound/kei_hit_sound.fsb"),
     Asset("SOUNDPACKAGE", "sound/kei_carol_a01.fev"),
     Asset("SOUND", "sound/kei_carol_a01.fsb"),
-    Asset("SOUNDPACKAGE", "sound/kei_carol_a02.fev"),
-    Asset("SOUND", "sound/kei_carol_a02.fsb"),
-    Asset("SOUNDPACKAGE", "sound/kei_carol_a03.fev"),
-    Asset("SOUND", "sound/kei_carol_a03.fsb"),
 }
 
 local ANIM_ASSETS = {
