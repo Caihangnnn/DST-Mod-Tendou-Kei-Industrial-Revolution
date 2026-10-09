@@ -124,7 +124,7 @@ local function MakeElectrobankItem(prefab, animation, image, on_eaten)
     return Prefab(prefab, fn, assets)
 end
 
-local function MakeDeviceItem(prefab, deployed_prefab, bank, build, image)
+local function MakeDeviceItem(prefab, deployed_prefab, bank, build, image, item_animation, placer_animation)
     local assets = {
         Asset("ANIM", "anim/" .. build .. ".zip"),
         Asset("ATLAS", IR_ATLAS),
@@ -140,7 +140,7 @@ local function MakeDeviceItem(prefab, deployed_prefab, bank, build, image)
         inst.AnimState:SetBuild(build)
         -- Ground item appearance.  The placement preview keeps its own
         -- animation below; this is the dropped/in-world item entity.
-        inst.AnimState:PlayAnimation("ui", true)
+        inst.AnimState:PlayAnimation(item_animation or "ui", true)
         inst:AddTag("kei_power_device_item")
         inst._custom_candeploy_fn = function(item, pt, mouseover, deployer, rot)
             return Power.CanDeployDevice(item, pt, mouseover, deployer, rot)
@@ -173,7 +173,7 @@ local function MakeDeviceItem(prefab, deployed_prefab, bank, build, image)
         return inst
     end
     return Prefab(prefab, fn, assets),
-        MakePlacer(prefab .. "_placer", build, build, "ui_place", false, true, nil, nil, nil, "eight")
+        MakePlacer(prefab .. "_placer", build, build, placer_animation or "ui_place", false, true, nil, nil, nil, "eight")
 end
 
 local function MakeWireItem(prefab, build, image, wire_kind, node_prefab)
@@ -228,6 +228,26 @@ table.insert(prefabs, generator_placer)
 local battery, battery_placer = MakeDeviceItem("kei_batterysm_item", "kei_batterysm", "kei_batterySm", "kei_batterysm", "kei_batterysm.tex")
 table.insert(prefabs, battery)
 table.insert(prefabs, battery_placer)
+for _, device in ipairs({
+    { "kei_research_center", "kei_research_center" },
+    { "kei_research_center2", "kei_research_center2" },
+    { "kei_research_space", "kei_research_space" },
+    { "kei_material_research_centre", "kei_material_research_centre" },
+}) do
+    local prefab = device[1]
+    local build = device[2]
+    local item, placer = MakeDeviceItem(
+        prefab .. "_item",
+        prefab,
+        build,
+        build,
+        prefab .. ".tex",
+        "on",
+        "on"
+    )
+    table.insert(prefabs, item)
+    table.insert(prefabs, placer)
+end
 -- Mobile batteries are inventory items rather than placeable power devices.
 -- A full one restores Kei's hunger/power to 100% and returns an empty one.
 table.insert(prefabs, MakeElectrobankItem(

@@ -29,11 +29,59 @@ local function GetDroneSide(inst, previous)
     return DroneAnimation.GetSide(inst, previous)
 end
 
-local function PlayDroneAnimation(inst, prefix, loop, side)
-    return DroneAnimation.Play(inst, prefix, loop, side)
+local function PlayDroneAnimation(inst, prefix, loop, side, directional)
+    return DroneAnimation.Play(inst, prefix, loop, side, false, false, directional)
 end
 
-local function CreateDecal(skin_build, side)
+local function HasProjectionRequest(inst)
+    return (inst.scanning ~= nil and inst.scanning:value())
+        or (inst.skill_beam_name ~= nil and inst.skill_beam_name:value() ~= "")
+end
+
+local function RefreshProjectionState(inst)
+    if not TheWorld.ismastersim or inst.sg == nil or inst.sg.currentstate == nil then
+        return
+    end
+
+    local state_name = inst.sg.currentstate.name
+    if HasProjectionRequest(inst) then
+        if state_name == "flight" or state_name == "projection_pst" then
+            inst.sg:GoToState("projection")
+        end
+    elseif state_name == "projection_loop" then
+        inst.sg:GoToState("projection_pst")
+    end
+end
+
+local function GroundEffectPostUpdate(inst)
+    local x, _, z = inst.Transform:GetWorldPosition()
+    inst.decal.Transform:SetPosition(x, 0, z)
+end
+
+local function GroundEffectOnRemove(inst)
+    if inst.decal ~= nil and inst.decal:IsValid() then
+        inst.decal:Remove()
+    end
+end
+
+local function CreateGroundEffect(decal)
+    local inst = CreateEntity()
+
+    inst:AddTag("DECOR")
+    inst:AddTag("NOCLICK")
+    inst.persists = false
+
+    inst.entity:AddTransform()
+    inst.decal = decal
+
+    inst:AddComponent("updatelooper")
+    inst.components.updatelooper:AddPostUpdateFn(GroundEffectPostUpdate)
+    inst.OnRemoveEntity = GroundEffectOnRemove
+
+    return inst
+end
+
+local function CreateDroneGroundDecal(side)
     local inst = CreateEntity()
 
     inst:AddTag("FX")
@@ -43,11 +91,9 @@ local function CreateDecal(skin_build, side)
 
     inst.entity:AddTransform()
     inst.entity:AddAnimState()
-
     inst.AnimState:SetBank("kei_drone")
     inst.AnimState:SetBuild("kei_drone")
-    inst._kei_drone_animation = true
-    PlayDroneAnimation(inst, "idle_ground", true, side)
+    PlayDroneAnimation(inst, "idle_ground", true, side, true)
     inst.AnimState:SetLightOverride(0.15)
     inst.AnimState:SetOrientation(ANIM_ORIENTATION.OnGround)
     inst.AnimState:SetLayer(LAYER_BACKGROUND)
@@ -57,64 +103,27 @@ local function CreateDecal(skin_build, side)
     return inst
 end
 
-local function BeamPostUpdate(inst)
-    local x, _, z = inst.Transform:GetWorldPosition()
-    inst.decal.Transform:SetPosition(x, 0, z)
+local function HasDroneGroundDecalRequest(inst)
+    return (inst.scanning ~= nil and inst.scanning:value())
+        or (inst.skill_beam_name ~= nil and inst.skill_beam_name:value() == "survey")
+end
 
-    local parent = inst.entity:GetParent()
-    if parent ~= nil and parent:IsValid() then
-        local side = GetDroneSide(parent, inst._kei_drone_side)
-        if side ~= inst._kei_drone_side then
-            inst._kei_drone_side = side
-            PlayDroneAnimation(inst, "guang_loop", true, side)
-            if inst.decal._kei_drone_animation then
-                PlayDroneAnimation(inst.decal, "idle_ground", true, side)
-            end
+local function RefreshDroneGroundDecal(inst)
+    if HasDroneGroundDecalRequest(inst) then
+        if inst._kei_scan_ground_effect == nil then
+            inst._kei_scan_ground_effect = CreateGroundEffect(
+                CreateDroneGroundDecal(GetDroneSide(inst))
+            )
+            inst._kei_scan_ground_effect.entity:SetParent(inst.entity)
         end
+    elseif inst._kei_scan_ground_effect ~= nil then
+        inst._kei_scan_ground_effect:Remove()
+        inst._kei_scan_ground_effect = nil
     end
-end
-
-local function BeamOnRemoveEntity(inst)
-    inst.decal:Remove()
-end
-
-local function CreateBeam(skin_build, side)
-    local inst = CreateEntity()
-
-    inst:AddTag("DECOR")
-    inst:AddTag("NOCLICK")
-    inst.persists = false
-
-    inst.entity:AddTransform()
-    inst.entity:AddAnimState()
-
-    inst.AnimState:SetBank("kei_drone")
-    inst.AnimState:SetBuild("kei_drone")
-    inst._kei_drone_animation = true
-    PlayDroneAnimation(inst, "guang_loop", true, side)
-    inst.AnimState:SetFinalOffset(-1)
-    inst.AnimState:SetLightOverride(0.15)
-
-    inst.decal = CreateDecal(skin_build, side)
-    inst._kei_drone_side = side
-
-    inst:AddComponent("updatelooper")
-    inst.components.updatelooper:AddPostUpdateFn(BeamPostUpdate)
-    inst.OnRemoveEntity = BeamOnRemoveEntity
-
-    return inst
 end
 
 local function OnScanningDirty(inst)
-    if inst.scanning:value() then
-        if inst.beam == nil then
-            inst.beam = CreateBeam(inst.build:value(), GetDroneSide(inst))
-            inst.beam.entity:SetParent(inst.entity)
-        end
-    elseif inst.beam ~= nil then
-        inst.beam:Remove()
-        inst.beam = nil
-    end
+    RefreshDroneGroundDecal(inst)
 end
 
 local function CreateHaloPart(animation, onground, side)
@@ -127,69 +136,16 @@ local function CreateHaloPart(animation, onground, side)
     inst.entity:AddTransform()
     inst.entity:AddAnimState()
     inst._kei_drone_animation = not onground
-    local animation_name = animation
-    if onground then
-        inst.AnimState:SetBank("kei_halo_350")
-        inst.AnimState:SetBuild("kei_halo_350")
-    else
-        -- The new drone build supplies the shared airborne beam animation.
-        -- Skill-specific ground halos remain on kei_halo_350 for now.
-        inst.AnimState:SetBank("kei_drone")
-        inst.AnimState:SetBuild("kei_drone")
-        animation_name = "guang_loop_" .. (side or "upside")
-    end
-    inst.AnimState:PlayAnimation(animation_name, true)
+    inst.AnimState:SetBank("kei_halo_350")
+    inst.AnimState:SetBuild("kei_halo_350")
+    inst.AnimState:PlayAnimation(animation, true)
     inst.AnimState:SetLightOverride(0.15)
 
-    if onground then
-        inst.AnimState:SetMultColour(1, 1, 1, 0.5)
-        inst.AnimState:SetOrientation(ANIM_ORIENTATION.OnGround)
-        inst.AnimState:SetLayer(LAYER_BACKGROUND)
-        inst.AnimState:SetSortOrder(3)
-        inst.Transform:SetScale(2.5, 2.5, 2.5)
-    else
-        inst.AnimState:SetFinalOffset(-1)
-    end
-
-    return inst
-end
-
-local function HaloPostUpdate(inst)
-    local x, _, z = inst.Transform:GetWorldPosition()
-    inst.decal.Transform:SetPosition(x, 0, z)
-
-    local parent = inst.entity:GetParent()
-    if parent ~= nil and parent:IsValid() and inst.beam ~= nil then
-        local side = GetDroneSide(parent, inst._kei_drone_side)
-        if side ~= inst._kei_drone_side then
-            inst._kei_drone_side = side
-            PlayDroneAnimation(inst.beam, "guang_loop", true, side)
-        end
-    end
-end
-
-local function HaloOnRemoveEntity(inst)
-    if inst.decal ~= nil and inst.decal:IsValid() then
-        inst.decal:Remove()
-    end
-end
-
-local function CreateHaloBeam(animation)
-    local inst = CreateEntity()
-
-    inst:AddTag("DECOR")
-    inst:AddTag("NOCLICK")
-    inst.persists = false
-
-    inst.entity:AddTransform()
-    inst.beam = CreateHaloPart(animation, false, "upside")
-    inst.beam.entity:SetParent(inst.entity)
-    inst.decal = CreateHaloPart(animation, true)
-    inst._kei_drone_side = "upside"
-
-    inst:AddComponent("updatelooper")
-    inst.components.updatelooper:AddPostUpdateFn(HaloPostUpdate)
-    inst.OnRemoveEntity = HaloOnRemoveEntity
+    inst.AnimState:SetMultColour(1, 1, 1, 0.5)
+    inst.AnimState:SetOrientation(ANIM_ORIENTATION.OnGround)
+    inst.AnimState:SetLayer(LAYER_BACKGROUND)
+    inst.AnimState:SetSortOrder(3)
+    inst.Transform:SetScale(2.5, 2.5, 2.5)
 
     return inst
 end
@@ -229,16 +185,11 @@ end
 
 local function CreateSkillBeam(inst, beam_name)
     if beam_name == "survey" then
-        return CreateBeam(0, GetDroneSide(inst))
+        return nil
     end
 
     if beam_name == "collect" then
-        local beam = CreateBeam(0, GetDroneSide(inst))
-        if beam.decal ~= nil and beam.decal:IsValid() then
-            beam.decal:Remove()
-        end
-        beam.decal = CreateHaloPart("kei_halo_collect", true)
-        return beam
+        return CreateGroundEffect(CreateHaloPart("kei_halo_collect", true))
     end
 
     if beam_name == "resurrection"
@@ -252,11 +203,6 @@ local function CreateSkillBeam(inst, beam_name)
         or beam_name == "nature"
         or beam_name == "friendly"
     then
-        -- 光束沿用旋翼测绘机的投影动画，地面纹理使用新的光环动画。
-        local beam = CreateBeam(0, GetDroneSide(inst))
-        if beam.decal ~= nil and beam.decal:IsValid() then
-            beam.decal:Remove()
-        end
         local ground_animation
         if beam_name == "teleport" then
             ground_animation = "kei_halo_transmit"
@@ -265,7 +211,7 @@ local function CreateSkillBeam(inst, beam_name)
         else
             ground_animation = "kei_halo_" .. beam_name
         end
-        beam.decal = CreateHaloPart(ground_animation, true)
+        local beam = CreateGroundEffect(CreateHaloPart(ground_animation, true))
         if beam_name == "strengthen" then
             StartStrengthenGroundFlicker(beam)
         end
@@ -275,6 +221,7 @@ end
 
 local function OnSkillBeamDirty(inst)
     RemoveSkillBeam(inst)
+    RefreshDroneGroundDecal(inst)
 
     local beam_name = inst.skill_beam_name:value()
     if beam_name == nil or beam_name == "" then
@@ -293,6 +240,7 @@ local function SetSkillBeam(inst, beam_name)
     if not TheNet:IsDedicated() then
         OnSkillBeamDirty(inst)
     end
+    RefreshProjectionState(inst)
 end
 
 local function GetSkillBeam(inst)
@@ -305,6 +253,7 @@ local function SetScanning(inst, scanning)
     if not TheNet:IsDedicated() then
         OnScanningDirty(inst)
     end
+    RefreshProjectionState(inst)
 end
 
 local function CalcDeliveryTime(inst, dest, doer)
@@ -438,14 +387,12 @@ local function OnEntitySleep(inst)
 end
 
 local function OnBuildDirty(inst)
-    if inst.beam ~= nil then
-        if inst.build:value() == 0 then
-            inst.beam.AnimState:SetBuild("kei_drone")
-            inst.beam.decal.AnimState:SetBuild("kei_drone")
-        else
-            inst.beam.AnimState:SetBuild("kei_drone")
-            inst.beam.decal.AnimState:SetBuild("kei_drone")
-        end
+    if inst._kei_scan_ground_effect ~= nil
+        and inst._kei_scan_ground_effect.decal ~= nil
+        and inst._kei_scan_ground_effect.decal:IsValid()
+        and inst._kei_scan_ground_effect.decal.AnimState ~= nil
+    then
+        inst._kei_scan_ground_effect.decal.AnimState:SetBuild("kei_drone")
     end
 end
 
@@ -469,6 +416,10 @@ local function OnDroneRemoved(inst)
         beam_controller.components["drone/beam"]:Stop()
     end
     RemoveSkillBeam(inst)
+    if inst._kei_scan_ground_effect ~= nil then
+        inst._kei_scan_ground_effect:Remove()
+        inst._kei_scan_ground_effect = nil
+    end
     local pilot = inst._kei_drone_pilot
     if pilot ~= nil and pilot:IsValid() and pilot.sg ~= nil then
         pilot._kei_rotor_pilot_drone = nil

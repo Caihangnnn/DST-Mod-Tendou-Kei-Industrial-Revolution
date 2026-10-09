@@ -6,8 +6,23 @@ local function GetDroneSide(inst)
     return side
 end
 
-local function PlayDroneAnimation(inst, prefix, loop, paired, force)
-    return DroneAnimation.Play(inst, prefix, loop, GetDroneSide(inst), paired, force)
+local function PlayDroneAnimation(inst, prefix, loop, paired, force, directional)
+    return DroneAnimation.Play(inst, prefix, loop, GetDroneSide(inst), paired, force, directional)
+end
+
+local function HasProjectionRequest(inst)
+    return (inst.scanning ~= nil and inst.scanning:value())
+        or (inst.skill_beam_name ~= nil and inst.skill_beam_name:value() ~= "")
+end
+
+local function ShouldEndProjection(inst, dt)
+    if HasProjectionRequest(inst) then
+        inst.sg.statemem.no_skill_beam_time = nil
+        return false
+    end
+
+    inst.sg.statemem.no_skill_beam_time = (inst.sg.statemem.no_skill_beam_time or 0) + (dt or FRAMES)
+    return inst.sg.statemem.no_skill_beam_time >= 0.2
 end
 
 local function ForceVisible(inst)
@@ -19,58 +34,44 @@ local function UpdateHoverMotion(inst, dt)
         return
     end
 
-    local period = 1.2
-    local amp = 0.2
-    local ht0 = 7
-    local liftoff_period = period * 3
-
     local x, y, z = inst.Transform:GetWorldPosition()
     local t = inst.sg.statemem.t
-    if t == nil then
-        if y < 2 then
-            amp = ht0
-            period = liftoff_period
-            if y <= 0 then
-                y = 0.01
-                inst.Physics:Teleport(x, y, z)
-            end
-            t = math.asin((y - ht0) / amp) * period / TWOPI
-        elseif y < ht0 - amp - 0.5 then
-            t = 0.75 * period
-        else
-            t = math.random() * period
+    local target_height = 7
+
+    if t == nil and y < 2 then
+        if y <= 0 then
+            y = 0.01
+            inst.Physics:Teleport(x, y, z)
         end
-        t = t + dt
-    else
-        t = t + dt
-        if t < 0 then
-            amp = ht0
-            period = liftoff_period
-        end
+        t = math.asin((y - target_height) / target_height) * 3 * 1.2 / TWOPI
     end
 
-    local ht = ht0 + math.sin(t * TWOPI / period) * amp
-    local vy = (ht - y) * 15
+    if t ~= nil and t < 0 then
+        t = math.min(0, t + dt)
+        target_height = target_height + math.sin(t * TWOPI / (3 * 1.2)) * target_height
+        inst.sg.statemem.t = t
+    end
+
+    local vy = (target_height - y) * 15
     local vx, _, vz = inst.Physics:GetMotorVel()
     inst.Physics:SetMotorVel(vx, vy, vz)
-    inst.sg.statemem.t = t
 end
 
 local function UpdateHover(inst, dt)
     UpdateHoverMotion(inst, dt)
     ForceVisible(inst)
-    PlayDroneAnimation(inst, "fly_loop", true)
 end
 
 local function UpdateProjection(inst, dt)
     if inst:IsAsleep() then
         return
     end
-    -- Projection changes the visual layer only; it keeps the same airborne
-    -- hover/motion rules as the normal flight state.
+    if ShouldEndProjection(inst, dt) then
+        inst.sg:GoToState("projection_pst")
+        return
+    end
     UpdateHoverMotion(inst, dt)
     ForceVisible(inst)
-    PlayDroneAnimation(inst, "guang_loop", true)
 end
 
 local LANDING_HEIGHT = 1.5
@@ -91,12 +92,19 @@ local function UpdateLanding(inst)
 
     ForceVisible(inst)
     inst.Physics:SetMotorVel(0, -LANDING_SPEED, 0)
-    PlayDroneAnimation(inst, "fly_loop", true)
 end
 
 local function UpdateGround(inst)
     ForceVisible(inst)
-    PlayDroneAnimation(inst, "idle_ground", true)
+end
+
+local function UpdateProjectionStart(inst, dt)
+    UpdateHoverMotion(inst, dt)
+    ForceVisible(inst)
+end
+
+local function UpdateProjectionEnd(inst)
+    ForceVisible(inst)
 end
 
 local function SetAnimationTimeout(inst)
@@ -115,7 +123,7 @@ local states =
             local x, _, z = inst.Transform:GetWorldPosition()
             inst.Physics:Stop()
             inst.Physics:Teleport(x, 0.01, z)
-            PlayDroneAnimation(inst, "idle_ground", true, false, true)
+            PlayDroneAnimation(inst, "idle_ground", true, false, true, true)
         end,
 
         onupdate = UpdateGround,
@@ -133,17 +141,6 @@ local states =
             inst.sg.statemem.t = nil
             SetAnimationTimeout(inst)
         end,
-
-        timeline =
-        {
-            FrameEvent(0, function(inst)
-                inst.SoundEmitter:PlaySoundWithParams(
-                    "rifts5/wagdrone_rolling/beep_turnon",
-                    { pitch = 0.9 },
-                    0.4
-                )
-            end),
-        },
 
         events =
         {
@@ -171,7 +168,11 @@ local states =
             ForceVisible(inst)
             inst.AnimState:SetBank("kei_drone")
             inst.AnimState:SetBuild("kei_drone")
-            PlayDroneAnimation(inst, "fly_loop", true, false, true)
+            if HasProjectionRequest(inst) then
+                inst.sg:GoToState("projection")
+                return
+            end
+            PlayDroneAnimation(inst, "fly_loop", true, false, true, true)
         end,
 
         onupdate = UpdateHover,
@@ -181,9 +182,11 @@ local states =
         name = "projection",
         tags = { "busy", "airborne", "projection" },
 
+        onupdate = UpdateProjectionStart,
+
         onenter = function(inst)
             ForceVisible(inst)
-            PlayDroneAnimation(inst, "guang_pre", false, false, true)
+            PlayDroneAnimation(inst, "guang_pre", false, false, true, true)
             SetAnimationTimeout(inst)
         end,
 
@@ -211,7 +214,7 @@ local states =
 
         onenter = function(inst)
             ForceVisible(inst)
-            PlayDroneAnimation(inst, "guang_loop", true, false, true)
+            PlayDroneAnimation(inst, "guang_loop", true, false, true, true)
         end,
 
         onupdate = UpdateProjection,
@@ -221,9 +224,11 @@ local states =
         name = "projection_pst",
         tags = { "busy", "airborne", "projection" },
 
+        onupdate = UpdateProjectionEnd,
+
         onenter = function(inst)
             ForceVisible(inst)
-            PlayDroneAnimation(inst, "guang_pst", false, false, true)
+            PlayDroneAnimation(inst, "guang_pst", false, false, true, true)
             SetAnimationTimeout(inst)
         end,
 
@@ -251,7 +256,7 @@ local states =
 
         onenter = function(inst)
             ForceVisible(inst)
-            PlayDroneAnimation(inst, "fly_loop", true, false, true)
+            PlayDroneAnimation(inst, "fly_loop", true, false, true, true)
             inst.Physics:SetMotorVel(0, -LANDING_SPEED, 0)
         end,
 

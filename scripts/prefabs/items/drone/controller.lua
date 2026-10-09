@@ -650,9 +650,6 @@ local function ActivateRotorBeam(inst, doer, beam_name)
         if inst.components["drone/beam"] ~= nil then
             inst.components["drone/beam"]:Stop()
         end
-        if IsDroneInState(drone, "projection_loop") then
-            drone.sg:GoToState("projection_pst")
-        end
     else
         if inst.components["drone/beam"] == nil
             or not inst.components["drone/beam"]:Start(beam_name, drone, doer)

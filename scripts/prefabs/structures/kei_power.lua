@@ -105,6 +105,24 @@ local function SetDeviceAnimation(inst, powered)
     end
     local animation = powered and inst.kei_power_work_animation
         or inst.kei_power_idle_animation
+    local transition_animation = powered
+        and inst.kei_power_work_pre_animation
+        or inst.kei_power_work_post_animation
+    if inst.kei_power_work_pre_animation ~= nil
+        or inst.kei_power_work_post_animation ~= nil
+    then
+        if inst.kei_power_animation_powered == powered then
+            return
+        end
+        inst.kei_power_animation_powered = powered
+        if transition_animation ~= nil then
+            inst.AnimState:PlayAnimation(transition_animation, false)
+            inst.AnimState:PushAnimation(animation, true)
+        elseif animation ~= nil then
+            inst.AnimState:PlayAnimation(animation, true)
+        end
+        return
+    end
     if animation ~= nil then
         inst.AnimState:PlayAnimation(animation, true)
     end
@@ -738,13 +756,17 @@ local function MakePowerDevice(prefab, bank, build, tags, config, on_work)
         inst.kei_power_idle_animation = config.idle_animation or "off"
         inst.kei_power_work_animation = config.work_animation
             or inst.kei_power_idle_animation
+        inst.kei_power_work_pre_animation = config.work_pre_animation
+        inst.kei_power_work_post_animation = config.work_post_animation
         inst.kei_power_battery_full_animation = config.battery_full_animation
         inst.kei_power_battery_empty_animation = config.battery_empty_animation
         inst.kei_power_set_battery_visual = SetBatteryVisual
+        inst.kei_power_animation_powered = false
         inst.AnimState:PlayAnimation(inst.kei_power_idle_animation, true)
         -- Enlarge only the rendered device.  Physics remains the same
         -- alchemy-engine-sized obstacle created above.
-        inst.AnimState:SetScale(DEVICE_VISUAL_SCALE, DEVICE_VISUAL_SCALE)
+        local visual_scale = config.visual_scale or DEVICE_VISUAL_SCALE
+        inst.AnimState:SetScale(visual_scale, visual_scale)
 
         inst:AddTag("structure")
         inst:AddTag("kei_power_device")
@@ -1146,6 +1168,60 @@ local prefabs = {
             work_animation = "working_loop",
         },
         OnBatteryWorked
+    ),
+    MakePowerDevice(
+        "kei_research_center",
+        "kei_research_center",
+        "kei_research_center",
+        { "kei_power_consumer" },
+        {
+            power_consumption = 400,
+            idle_animation = "on",
+            work_pre_animation = "working_pre",
+            work_animation = "working_loop",
+            work_post_animation = "working_pst",
+        }
+    ),
+    MakePowerDevice(
+        "kei_research_center2",
+        "kei_research_center2",
+        "kei_research_center2",
+        { "kei_power_consumer" },
+        {
+            power_consumption = 800,
+            idle_animation = "on",
+            work_pre_animation = "working_pre",
+            work_animation = "working_loop",
+            work_post_animation = "working_pst",
+        }
+    ),
+    MakePowerDevice(
+        "kei_research_space",
+        "kei_research_space",
+        "kei_research_space",
+        { "kei_power_consumer" },
+        {
+            power_consumption = 1200,
+            visual_scale = DEVICE_VISUAL_SCALE * 0.8,
+            idle_animation = "on",
+            work_pre_animation = "working_pre",
+            work_animation = "working_loop",
+            work_post_animation = "working_pst",
+        }
+    ),
+    MakePowerDevice(
+        "kei_material_research_centre",
+        "kei_material_research_centre",
+        "kei_material_research_centre",
+        { "kei_power_consumer" },
+        {
+            power_consumption = 1600,
+            visual_scale = DEVICE_VISUAL_SCALE * 0.8,
+            idle_animation = "on",
+            work_pre_animation = "working_pre",
+            work_animation = "working_loop",
+            work_post_animation = "working_pst",
+        }
     ),
     MakePowerDevice(
         "kei_electrobank_charger_small",
